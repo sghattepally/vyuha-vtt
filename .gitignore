@@ -1,0 +1,9 @@
+# Python
+venv/
+__pycache__/
+
+# Database
+vyuha.db
+
+# VS Code
+.vscode/
