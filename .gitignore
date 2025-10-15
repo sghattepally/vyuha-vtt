@@ -7,3 +7,8 @@ vyuha.db
 
 # VS Code
 .vscode/
+
+# Node / JavaScript
+/ui/node_modules
+/ui/dist
+.env
