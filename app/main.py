@@ -3,14 +3,17 @@
 # ==================================
 # 1. Imports
 # ==================================
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from sqlalchemy.orm import Session
 from . import models, game_rules
 from .models import engine, SessionLocal
 import pydantic
 import random
 from typing import List
+from fastapi.middleware.cors import CORSMiddleware
+import json
+import asyncio
+
 
 # ==================================
 # 2. Database Setup
@@ -20,9 +23,11 @@ models.Base.metadata.create_all(bind=engine)
 # ==================================
 # 3. Pydantic Schemas
 # ==================================
+# --- User Schemas ---
 class UserCreate(pydantic.BaseModel):
     username: str
 
+# --- Ability Schemas ---
 class AbilityCreate(pydantic.BaseModel):
     name: str
     description: str | None = None
@@ -41,6 +46,7 @@ class AbilitySchema(AbilityCreate):
     class Config:
         from_attributes = True
 
+# --- Character Schemas ---
 class CharacterAbilityCreate(pydantic.BaseModel):
     ability_id: int
 
@@ -56,21 +62,30 @@ class CharacterSchema(pydantic.BaseModel):
     race: str
     character_class: str
     level: int
-    bala: int; dakshata: int; dhriti: int; buddhi: int; prajna: int; samkalpa: int
-    max_prana: int; max_tapas: int; max_maya: int
+    bala: int
+    dakshata: int
+    dhriti: int
+    buddhi: int
+    prajna: int
+    samkalpa: int
+    max_prana: int
+    max_tapas: int
+    max_maya: int
     movement_speed: int
     class Config:
         from_attributes = True
 
+# --- Session Schemas ---
 class SessionCharacterSchema(pydantic.BaseModel):
     id: int
-    character_id: int
-    character_name: str
+    x_pos: int | None = None
+    y_pos: int | None = None
     current_prana: int
     current_tapas: int
     current_maya: int
-    x_pos: int | None = None
-    y_pos: int | None = None
+    remaining_speed: int
+    status: str
+    character: CharacterSchema
     class Config:
         from_attributes = True
 
@@ -85,15 +100,17 @@ class GameSessionSchema(pydantic.BaseModel):
     current_mode: str
     active_loka_resonance: str
     participants: List[SessionCharacterSchema] = []
+    turn_order: List[int] = []
+    current_turn_index: int = 0
+    log: List[str] = []
     class Config:
         from_attributes = True
 
 class ParticipantPosition(pydantic.BaseModel):
-    participant_id: int # This is the SessionCharacter ID
+    participant_id: int
     x_pos: int
     y_pos: int
 
-# The new, more powerful update schema
 class GameSessionUpdate(pydantic.BaseModel):
     current_mode: str | None = None
     active_loka_resonance: str | None = None
@@ -107,23 +124,56 @@ class GameAction(pydantic.BaseModel):
     new_x: int | None = None
     new_y: int | None = None
 
-# ==================================
-# 4. The FastAPI App Instance
-# ==================================
-app = FastAPI()
-origins = [
-    "http://localhost:5173", # The address of our Vite React app
-]
+class ActionResponse(pydantic.BaseModel):
+    session: GameSessionSchema
+    message: str
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"], # Allow all methods (GET, POST, etc.)
-    allow_headers=["*"], # Allow all headers
-)
 # ==================================
-# 5. Reusable Database Dependency
+# 4. The FastAPI App Instance & CORS
+# ==================================
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[int, list[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, session_id: int):
+        await websocket.accept()
+        if session_id not in self.active_connections:
+            self.active_connections[session_id] = []
+        self.active_connections[session_id].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, session_id: int):
+        if session_id in self.active_connections and websocket in self.active_connections[session_id]:
+            self.active_connections[session_id].remove(websocket)
+
+    async def broadcast_json(self, session_id: int, json_data: str):
+        if session_id in self.active_connections:
+            # Create a list of tasks for sending messages
+            tasks = [connection.send_text(json_data) for connection in self.active_connections[session_id]]
+            # Run them concurrently
+            await asyncio.gather(*tasks)
+
+    # This is a new helper function we've added.
+    async def broadcast_session_state(self, session_id: int, db: Session):
+        """Fetches the session from DB, validates it, and broadcasts it."""
+        print(f"Attempting to broadcast state for session {session_id}")
+        session_db = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+        if session_db:
+            # Convert the SQLAlchemy object to a Pydantic schema
+            session_schema = GameSessionSchema.from_orm(session_db)
+            # Convert the schema to a JSON string
+            json_payload = session_schema.model_dump_json()
+            # Broadcast the JSON string
+            await self.broadcast_json(session_id, json_payload)
+            print(f"Successfully broadcasted state for session {session_id}")
+        else:
+            print(f"Could not find session {session_id} in DB to broadcast.")
+manager = ConnectionManager()
+
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# ==================================
+# 5. DB Dependency
 # ==================================
 def get_db():
     db = SessionLocal()
@@ -139,6 +189,25 @@ def get_db():
 def read_root():
     return {"message": "Welcome to the Vyuha VTT Backend!"}
 
+# In app/main.py, replace the websocket_endpoint function
+
+@app.websocket("/ws/{session_id}/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: int, user_id: int):
+    await manager.connect(websocket, session_id)
+    db = SessionLocal()
+    try:
+        # When a user connects, immediately broadcast the latest game state to everyone in the session.
+        await manager.broadcast_session_state(session_id, db)
+        
+        # Keep the connection alive to listen for future messages (e.g., chat)
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        print(f"User {user_id} disconnected from session {session_id}")
+        manager.disconnect(websocket, session_id)
+    finally:
+        db.close()
+
 # --- USER ENDPOINTS ---
 @app.post("/users/")
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
@@ -146,7 +215,7 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
     db.add(new_user); db.commit(); db.refresh(new_user)
     return new_user
 
-# --- ABILITY ENDPOINTS (The Rulebook) ---
+# --- ABILITY ENDPOINTS ---
 @app.post("/abilities/", response_model=AbilitySchema)
 def create_ability(ability: AbilityCreate, db: Session = Depends(get_db)):
     new_ability = models.Ability(**ability.model_dump())
@@ -157,13 +226,12 @@ def create_ability(ability: AbilityCreate, db: Session = Depends(get_db)):
 @app.post("/characters/", response_model=CharacterSchema)
 def create_character(character_input: CharacterCreate, db: Session = Depends(get_db)):
     template = game_rules.CLASS_TEMPLATES.get(character_input.character_class)
-    if not template:
-        raise HTTPException(status_code=400, detail="Invalid character class")
-    dhriti_modifier = game_rules.get_attribute_modifier(template["attributes"]["dhriti"])
+    if not template: raise HTTPException(status_code=400, detail="Invalid character class")
+    dhriti_mod = game_rules.get_attribute_modifier(template["attributes"]["dhriti"])
     character_data = {
         "name": character_input.name, "race": character_input.race,
         "character_class": character_input.character_class, "owner_id": character_input.owner_id,
-        "max_prana": 10 + dhriti_modifier,
+        "max_prana": 10 + dhriti_mod,
         "max_tapas": template["max_tapas"], "max_maya": template["max_maya"],
         **template["attributes"]
     }
@@ -175,23 +243,32 @@ def create_character(character_input: CharacterCreate, db: Session = Depends(get
 def read_user_characters(user_id: int, db: Session = Depends(get_db)):
     return db.query(models.Character).filter(models.Character.owner_id == user_id).all()
 
-# --- THIS ENDPOINT WAS MISSING ---
 @app.post("/characters/{character_id}/learn_ability/", response_model=CharacterSchema)
 def learn_ability(character_id: int, ability_link: CharacterAbilityCreate, db: Session = Depends(get_db)):
     character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character: raise HTTPException(status_code=404, detail="Character not found")
+    new_link = models.CharacterAbility(character_id=character_id, ability_id=ability_link.ability_id)
+    db.add(new_link); db.commit()
+    return character
+
+@app.get("/characters/{character_id}/abilities/", response_model=List[AbilitySchema])
+def get_character_abilities(character_id: int, db: Session = Depends(get_db)):
+    """Returns a list of all abilities a specific character has learned."""
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not character:
         raise HTTPException(status_code=404, detail="Character not found")
-    
-    new_link = models.CharacterAbility(
-        character_id=character_id,
-        ability_id=ability_link.ability_id
-    )
-    db.add(new_link)
-    db.commit()
-    return character
-# ---------------------------------
 
-# --- SESSION ENDPOINTS (The Game Itself) ---
+    ability_links = db.query(models.CharacterAbility).filter(models.CharacterAbility.character_id == character_id).all()
+    
+    abilities = []
+    for link in ability_links:
+        ability = db.query(models.Ability).filter(models.Ability.id == link.ability_id).first()
+        if ability:
+            abilities.append(ability)
+            
+    return abilities
+
+# --- SESSION ENDPOINTS ---
 @app.post("/sessions/", response_model=GameSessionSchema)
 def create_session(session_input: GameSessionCreate, db: Session = Depends(get_db)):
     new_session = models.GameSession(campaign_name=session_input.campaign_name, gm_id=session_input.gm_id)
@@ -206,96 +283,168 @@ def create_session(session_input: GameSessionCreate, db: Session = Depends(get_d
             )
             db.add(session_char)
     db.commit(); db.refresh(new_session)
-    return read_session(new_session.id, db)
+    return new_session
 
 @app.get("/sessions/{session_id}/", response_model=GameSessionSchema)
 def read_session(session_id: int, db: Session = Depends(get_db)):
     session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    participants_data = []
-    for p in session.participants:
-        participants_data.append({
-            "id": p.id, "character_id": p.character_id,
-            "character_name": p.character.name, "current_prana": p.current_prana,
-            "current_tapas": p.current_tapas, "current_maya": p.current_maya,
-            "x_pos": p.x_pos, "y_pos": p.y_pos
-        })
-    return GameSessionSchema(
-        id=session.id, campaign_name=session.campaign_name,
-        current_mode=session.current_mode, active_loka_resonance=session.active_loka_resonance,
-        participants=participants_data
-    )
+    if not session: raise HTTPException(status_code=404, detail="Session not found")
+    return session
 
-# app/main.py - in the API Endpoints section
 
 @app.patch("/sessions/{session_id}/", response_model=GameSessionSchema)
-def update_session(session_id: int, session_update: GameSessionUpdate, db: Session = Depends(get_db)):
-    # 1. Find the existing session in the database
+async def update_session(session_id: int, session_update: GameSessionUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # 2. Update the simple fields (mode, loka)
+    if not session: raise HTTPException(status_code=404, detail="Session not found")
+    
+    # ... (The logic inside this function remains the same)
     update_data = session_update.model_dump(exclude_unset=True)
-    if "current_mode" in update_data:
-        session.current_mode = update_data["current_mode"]
-    if "active_loka_resonance" in update_data:
-        session.active_loka_resonance = update_data["active_loka_resonance"]
-
-    # 3. Process participant positions
+    if "current_mode" in update_data: session.current_mode = update_data["current_mode"]
+    if "active_loka_resonance" in update_data: session.active_loka_resonance = update_data["active_loka_resonance"]
     if session_update.participant_positions:
         for pos_data in session_update.participant_positions:
-            participant = db.query(models.SessionCharacter).filter(
-                models.SessionCharacter.id == pos_data.participant_id,
-                models.SessionCharacter.session_id == session_id
-            ).first()
-            if participant:
-                participant.x_pos = pos_data.x_pos
-                participant.y_pos = pos_data.y_pos
+            p = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == pos_data.participant_id, models.SessionCharacter.session_id == session_id).first()
+            if p: p.x_pos = pos_data.x_pos; p.y_pos = pos_data.y_pos
+    
+    db.commit()
+    
+    updated_schema = GameSessionSchema.model_validate(session)
+    background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
 
-    # 4. Commit the changes
+    return updated_schema
+
+@app.post("/sessions/{session_id}/begin_combat", response_model=GameSessionSchema)
+async def begin_combat(session_id: int, background_tasks: BackgroundTasks,db: Session = Depends(get_db)):
+    # ... (The logic inside this function remains the same)
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session or session.current_mode != 'staging': raise HTTPException(status_code=400, detail="Not in staging.")
+    initiative_results = []
+    for p in session.participants:
+        dakshata_mod = game_rules.get_attribute_modifier(p.character.dakshata)
+        roll = random.randint(1, 20)
+        initiative_results.append({"participant_id": p.id, "score": roll + dakshata_mod, "dakshata": p.character.dakshata})
+        p.status = 'active'
+    initiative_results.sort(key=lambda x: (x['score'], x['dakshata']), reverse=True)
+    session.turn_order = [result['participant_id'] for result in initiative_results]
+    session.current_turn_index = 0; session.current_mode = 'combat'
+    if session.turn_order:
+        first_char = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == session.turn_order[0]).first()
+        if first_char: first_char.remaining_speed = first_char.character.movement_speed
+    
     db.commit()
 
-    # 5. NEW SAFER RETURN: Refresh the session object we already have and return it
-    db.refresh(session)
-    # This manually rebuilds the response to ensure all data is fresh
-    return read_session(session_id, db)
+    updated_schema = GameSessionSchema.model_validate(session)
+    background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
+
+    return updated_schema
+
 
 # --- THE GAME ENGINE ---
-@app.post("/sessions/{session_id}/action")
-def perform_action(session_id: int, action: GameAction, db: Session = Depends(get_db)):
+# In app/main.py, replace the entire perform_action function with this:
+
+@app.post("/sessions/{session_id}/action", response_model=ActionResponse)
+async def perform_action(session_id: int, action: GameAction, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
     actor = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == action.actor_id).first()
     if not session or not actor or actor.session_id != session_id:
         raise HTTPException(status_code=400, detail="Invalid actor or session")
+
+    if actor.status == "downed":
+        raise HTTPException(status_code=400, detail=f"{actor.character.name} is downed and cannot take actions.")
+
+    message = ""
+
     if action.action_type == "MOVE":
+        if actor.x_pos is None: raise HTTPException(status_code=400, detail="Actor not on grid")
         distance = abs(actor.x_pos - action.new_x) + abs(actor.y_pos - action.new_y)
-        if distance > actor.character.movement_speed:
-            raise HTTPException(status_code=400, detail="Move distance exceeds speed")
-        actor.x_pos = action.new_x; actor.y_pos = action.new_y
+        
+        # --- THE FIX for movement ---
+        # It now correctly checks against remaining_speed
+        if distance > actor.remaining_speed:
+            raise HTTPException(status_code=400, detail=f"Move exceeds remaining speed of {actor.remaining_speed}")
+        
+        actor.x_pos = action.new_x
+        actor.y_pos = action.new_y
+        actor.remaining_speed -= distance # Subtract the distance moved
+        # ----------------------------
+
+        message = f"{actor.character.name} moves to ({action.new_x}, {action.new_y}). Remaining speed: {actor.remaining_speed}."
+
     elif action.action_type == "ATTACK":
         target = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == action.target_id).first()
         ability = db.query(models.Ability).filter(models.Ability.id == action.ability_id).first()
-        if not target or not ability:
-            raise HTTPException(status_code=404, detail="Target or Ability not found")
+        if not target or not ability: raise HTTPException(status_code=404, detail="Target or Ability not found")
+        if actor.x_pos is None or target.x_pos is None: raise HTTPException(status_code=400, detail="Characters not on grid")
+        
         distance = max(abs(actor.x_pos - target.x_pos), abs(actor.y_pos - target.y_pos))
         if distance > ability.range:
-            raise HTTPException(status_code=400, detail=f"Target out of range (Range: {ability.range}, Dist: {distance})")
-        to_hit_attr = getattr(actor.character, ability.to_hit_attribute)
-        to_hit_mod = game_rules.get_attribute_modifier(to_hit_attr)
+            raise HTTPException(status_code=400, detail=f"Target out of range! (Range: {ability.range}, Dist: {distance})")
+        
+        to_hit_mod = game_rules.get_attribute_modifier(getattr(actor.character, ability.to_hit_attribute))
         attack_roll = random.randint(1, 20)
         total_attack = attack_roll + to_hit_mod
-        evasion_mod = game_rules.get_attribute_modifier(target.character.dakshata)
-        evasion_dc = 10 + evasion_mod
+        
+        evasion_dc = 10 + game_rules.get_attribute_modifier(target.character.dakshata)
+        
         if total_attack >= evasion_dc:
             damage_mod = 0
             if ability.damage_attribute and ability.damage_attribute != "none":
-                damage_attr = getattr(actor.character, ability.damage_attribute)
-                damage_mod = game_rules.get_attribute_modifier(damage_attr)
+                damage_mod = game_rules.get_attribute_modifier(getattr(actor.character, ability.damage_attribute))
+            
             num, dice = map(int, ability.damage_dice.split('d'))
             damage_roll = sum(random.randint(1, dice) for _ in range(num))
             total_damage = max(0, damage_roll + damage_mod)
-            target.current_prana -= total_damage
+            
+            target.current_prana = max(0, target.current_prana - total_damage)
+            
+            # --- NEW, DETAILED MESSAGE ---
+            message = (
+                f"{actor.character.name}'s {ability.name} hits {target.character.name}! "
+                f"(Roll: {attack_roll} + Mod: {to_hit_mod} = {total_attack} vs DC {evasion_dc}). "
+                f"Deals {total_damage} damage. {target.character.name} has {target.current_prana} Prāṇa remaining."
+            )
+            # ---------------------------
+
+            if target.current_prana == 0:
+                target.status = "downed"
+                message += f" {target.character.name} is downed!"
+
+        else:
+            # --- NEW, DETAILED MESSAGE ---
+            message = (
+                f"{actor.character.name}'s {ability.name} misses {target.character.name}! "
+                f"(Roll: {attack_roll} + Mod: {to_hit_mod} = {total_attack} vs DC {evasion_dc})."
+            )
+            # ---------------------------
+    if message:
+        # Prepend the new message to the session's log.
+        # We check `session.log` exists to avoid errors on older sessions in your DB.
+        current_log = session.log if session.log else []
+        new_log = [message] + current_log
+        # Limit the log to the most recent 50 messages to prevent it from getting too large.
+        session.log = new_log[:50]
+    # <--- MODIFICATION END --->
     db.commit()
-    return read_session(session_id, db)
+    updated_schema = GameSessionSchema.model_validate(session)
+    background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
+    
+    return {"session": updated_schema, "message": message}
+
+@app.post("/sessions/{session_id}/next_turn", response_model=GameSessionSchema)
+async def next_turn(session_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    # ... (The logic inside this function remains the same)
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session or session.current_mode != 'combat': raise HTTPException(status_code=400, detail="Not in combat.")
+    current_char = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == session.turn_order[session.current_turn_index]).first()
+    if current_char: current_char.remaining_speed = 0
+    next_index = (session.current_turn_index + 1) % len(session.turn_order)
+    session.current_turn_index = next_index
+    next_char = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == session.turn_order[next_index]).first()
+    if next_char: next_char.remaining_speed = next_char.character.movement_speed
+    
+    db.commit()
+
+    updated_schema = GameSessionSchema.model_validate(session)
+    background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
+
+    return updated_schema

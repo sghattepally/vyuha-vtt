@@ -2,6 +2,7 @@
 
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
+from sqlalchemy.types import JSON
 
 # --- Database Setup ---
 DATABASE_URL = "sqlite:///./vyuha.db"
@@ -28,7 +29,7 @@ class Ability(Base):
     damage_dice = Column(String, nullable=True)
     damage_attribute = Column(String, nullable=True)
     status_effect = Column(String, nullable=True)
-    range = Column(Integer, default=1) # <-- Added Range
+    range = Column(Integer, default=1)
 
 class Character(Base):
     __tablename__ = "characters"
@@ -49,7 +50,7 @@ class Character(Base):
     max_maya = Column(Integer, default=4)
     level = Column(Integer, default=1)
     unlocked_loka_attunement = Column(String, nullable=True)
-    movement_speed = Column(Integer, default=6) # <-- Added Movement
+    movement_speed = Column(Integer, default=6)
 
 # --- Junction / Link Tables ---
 class CharacterAbility(Base):
@@ -66,6 +67,8 @@ class SessionCharacter(Base):
     current_prana = Column(Integer)
     current_tapas = Column(Integer)
     current_maya = Column(Integer)
+    remaining_speed = Column(Integer, default=0)
+    status = Column(String, default="active") # e.g., 'active', 'downed'
     x_pos = Column(Integer, nullable=True)
     y_pos = Column(Integer, nullable=True)
     character = relationship("Character")
@@ -78,4 +81,7 @@ class GameSession(Base):
     campaign_name = Column(String)
     current_mode = Column(String, default='exploration')
     active_loka_resonance = Column(String, default='none')
+    turn_order = Column(JSON, default=[])
+    current_turn_index = Column(Integer, default=0)
+    log = Column(JSON, default=[])
     participants = relationship("SessionCharacter", back_populates="session")
