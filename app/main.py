@@ -27,6 +27,13 @@ models.Base.metadata.create_all(bind=engine)
 class UserCreate(pydantic.BaseModel):
     username: str
 
+class UserSchema(pydantic.BaseModel):
+    id: int
+    username: str
+    class Config:
+        from_attributes = True
+
+
 # --- Ability Schemas ---
 class AbilityCreate(pydantic.BaseModel):
     name: str
@@ -215,12 +222,22 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
     db.add(new_user); db.commit(); db.refresh(new_user)
     return new_user
 
+@app.get("/users/", response_model=List[UserSchema])
+def read_all_users(db: Session = Depends(get_db)):
+    """Returns a list of all users."""
+    return db.query(models.User).all()
+
 # --- ABILITY ENDPOINTS ---
 @app.post("/abilities/", response_model=AbilitySchema)
 def create_ability(ability: AbilityCreate, db: Session = Depends(get_db)):
     new_ability = models.Ability(**ability.model_dump())
     db.add(new_ability); db.commit(); db.refresh(new_ability)
     return new_ability
+
+@app.get("/abilities/", response_model=List[AbilitySchema])
+def read_all_abilities(db: Session = Depends(get_db)):
+    """Returns a list of all abilities available in the game."""
+    return db.query(models.Ability).all()
 
 # --- CHARACTER ENDPOINTS ---
 @app.post("/characters/", response_model=CharacterSchema)

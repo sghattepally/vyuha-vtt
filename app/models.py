@@ -3,10 +3,14 @@
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 from sqlalchemy.types import JSON
+import os # <--- ADD THIS IMPORT
+from dotenv import load_dotenv # <--- ADD THIS IMPORT
+
+load_dotenv() # <--- ADD THIS LINE to load the .env file
 
 # --- Database Setup ---
-DATABASE_URL = "sqlite:///./vyuha.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+DATABASE_URL = os.getenv("DATABASE_URL")
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

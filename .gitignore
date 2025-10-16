@@ -2,8 +2,10 @@
 vtt/
 __pycache__/
 
+
 # Database
 vyuha.db
+.env
 
 # VS Code
 .vscode/

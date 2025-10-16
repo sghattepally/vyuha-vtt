@@ -1,0 +1,30 @@
+# docker-compose.yml (Corrected)
+
+services:
+  backend:
+    build:
+      context: ./app
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./app/.env
+    volumes:
+      # This line is updated to match the new path inside the container
+      - ./app:/code/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./ui
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./ui
+      - /app/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
