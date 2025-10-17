@@ -35,28 +35,32 @@ function GameRoom({ sessionData, currentUser, isGM }) {
     });
     setLayout(updatedLayout);
   };
+const COLLAPSED_HEIGHT = 1;
 
-  const togglePanelCollapse = (panelId) => {
-    setLayout(currentLayout => {
-      const panelIndex = currentLayout.findIndex(item => item.i === panelId);
-      if (panelIndex === -1) return currentLayout;
-      
-      const newLayout = [...currentLayout];
-      const panelLayout = newLayout[panelIndex];
-      const originalSpec = layout.find(l => l.i === panelId);
+const togglePanelCollapse = (panelKey) => {
+  setLayout(prevLayout => {
+    // Create a new array to ensure React triggers a re-render
+    const newLayout = prevLayout.map(panel => {
+      if (panel.i === panelKey) {
+        // Create a new panel object for immutability
+        const newPanel = { ...panel };
 
-      if (panelLayout.h > 1) { // If it's not collapsed
-        originalLayouts.current[panelId] = { h: panelLayout.h, minH: panelLayout.minH };
-        newLayout[panelIndex] = { ...panelLayout, h: 1, minH: 1 }; // Collapse
-      } else { // If it is collapsed
-        const { h, minH } = originalLayouts.current[panelId] || { h: originalSpec?.h || 4, minH: originalSpec?.minH || 2 };
-        newLayout[panelIndex] = { ...panelLayout, h, minH }; // Expand
+        if (panel.h !== COLLAPSED_HEIGHT) {
+          // If not collapsed, store original height and collapse it
+          newPanel.original_h = panel.h; // Store the height
+          newPanel.h = COLLAPSED_HEIGHT;
+        } else {
+          // If collapsed, restore it to its original height or a default
+          newPanel.h = newPanel.original_h || 3; // Restore or use a default
+        }
+        return newPanel;
       }
-      return newLayout;
+      return panel;
     });
+    return newLayout;
+  });
+};
 
-const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
-  const [turnActions, setTurnActions] = useState({ hasAttacked: false });
   const handlePrepareForCombat = async () => {
     if (!isGM) return;
     try {
@@ -184,9 +188,9 @@ const effectiveIsGM = isGM || isGmOverride;
         </div>
 
         <div key="main">
-          <Panel title="The World" onToggleCollapse={() => { /* ... */ }}>
+          <Panel title="The World" onToggleCollapse={() => togglePanelCollapse('main')}>
             
-            {/* --- THIS IS THE FIX: CONTEXT-AWARE RENDERING --- */}
+            
             {sessionData.current_mode === 'exploration' && (
                 <div className="exploration-view">
                   {effectiveIsGM && (
@@ -211,7 +215,6 @@ const effectiveIsGM = isGM || isGmOverride;
                 )}
               </div>
             )}
-            {/* ------------------------------------------- */}
             
           </Panel>
         </div>
@@ -232,5 +235,5 @@ const effectiveIsGM = isGM || isGmOverride;
     </div>
   </>);
 }
-}
+
 export default GameRoom;
