@@ -1,14 +1,22 @@
-// ui/src/components/Token.jsx
+// ui/src/components/Token.jsx (Corrected)
+
 import React from 'react';
 
 function Token({ participant, isActive, onTokenClick }) {
+  // No Hooks are used here, so it is safe.
   const healthPercentage = (participant.current_prana / participant.character.max_prana) * 100;
   const isDowned = participant.status === 'downed';
+
+  const handleClick = () => {
+    if (!isDowned && onTokenClick) {
+      onTokenClick(participant.id);
+    }
+  };
 
   return (
     <div
       className={`token ${isActive ? 'active-token' : ''} ${isDowned ? 'downed' : ''}`}
-      onClick={() => !isDowned && onTokenClick && onTokenClick(participant.id)}
+      onClick={handleClick}
     >
       {participant.character.name.charAt(0)}
       {!isDowned && (
@@ -19,4 +27,5 @@ function Token({ participant, isActive, onTokenClick }) {
     </div>
   );
 }
+
 export default Token;

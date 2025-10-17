@@ -3,6 +3,7 @@
 # ==================================
 # 1. Imports
 # ==================================
+import os
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from sqlalchemy.orm import Session
 from . import models, game_rules
@@ -11,7 +12,7 @@ import pydantic
 import random
 from typing import List
 from fastapi.middleware.cors import CORSMiddleware
-import json
+import json, string
 import asyncio
 
 
@@ -24,12 +25,13 @@ models.Base.metadata.create_all(bind=engine)
 # 3. Pydantic Schemas
 # ==================================
 # --- User Schemas ---
-class UserCreate(pydantic.BaseModel):
-    username: str
+class PlayerCreate(pydantic.BaseModel):
+    display_name: str
 
-class UserSchema(pydantic.BaseModel):
+class PlayerSchema(pydantic.BaseModel):
     id: int
-    username: str
+    display_name: str
+    current_session_id: int | None = None
     class Config:
         from_attributes = True
 
@@ -85,6 +87,7 @@ class CharacterSchema(pydantic.BaseModel):
 # --- Session Schemas ---
 class SessionCharacterSchema(pydantic.BaseModel):
     id: int
+    player_id: int | None = None
     x_pos: int | None = None
     y_pos: int | None = None
     current_prana: int
@@ -99,10 +102,13 @@ class SessionCharacterSchema(pydantic.BaseModel):
 class GameSessionCreate(pydantic.BaseModel):
     campaign_name: str
     gm_id: int
-    character_ids: List[int]
+    gm_access_code: str
+    character_ids: List[int] = []
 
 class GameSessionSchema(pydantic.BaseModel):
     id: int
+    gm_id: int
+    access_code: str | None = None
     campaign_name: str
     current_mode: str
     active_loka_resonance: str
@@ -112,6 +118,18 @@ class GameSessionSchema(pydantic.BaseModel):
     log: List[str] = []
     class Config:
         from_attributes = True
+
+class AddCharacterRequest(pydantic.BaseModel):
+    player_id: int
+    character_id: int
+
+class JoinRequest(pydantic.BaseModel):
+    access_code: str
+    display_name: str
+
+class JoinResponse(pydantic.BaseModel):
+    player: PlayerSchema
+    session: GameSessionSchema
 
 class ParticipantPosition(pydantic.BaseModel):
     participant_id: int
@@ -196,7 +214,24 @@ def get_db():
 def read_root():
     return {"message": "Welcome to the Vyuha VTT Backend!"}
 
-# In app/main.py, replace the websocket_endpoint function
+def generate_access_code(length: int = 6) -> str:
+    """Generates a random alphanumeric access code."""
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+@app.get("/rules/races", response_model=List[str])
+def get_races():
+    """Returns a list of all available player races."""
+    # This list is based on your Player's Handbook
+    return [
+        "Manushya", "Vaanara", "Yaksha", "Gandharva", 
+        "Apsara", "Kinnara", "Vidyadhara", "Naga", "Asura"
+    ]
+
+@app.get("/rules/classes", response_model=List[str])
+def get_classes():
+    """Returns a list of all available player classes."""
+    # This dynamically gets the class names from your game_rules file
+    return list(game_rules.CLASS_TEMPLATES.keys())
 
 @app.websocket("/ws/{session_id}/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: int, user_id: int):
@@ -216,13 +251,46 @@ async def websocket_endpoint(websocket: WebSocket, session_id: int, user_id: int
         db.close()
 
 # --- USER ENDPOINTS ---
-@app.post("/users/")
-def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    new_user = models.User(**user.model_dump())
-    db.add(new_user); db.commit(); db.refresh(new_user)
+@app.post("/users/", response_model=PlayerSchema)
+def get_or_create_user(user: PlayerCreate, db: Session = Depends(get_db)):
+    """
+    Finds a user by display_name. If they don't exist, creates them.
+    This prevents creating duplicate users.
+    """
+    db_user = db.query(models.User).filter(models.User.display_name == user.display_name).first()
+    if db_user:
+        return db_user
+    
+    new_user = models.User(display_name=user.display_name)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
     return new_user
 
-@app.get("/users/", response_model=List[UserSchema])
+@app.post("/join", response_model=JoinResponse)
+async def join_session(join_request: JoinRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    session = db.query(models.GameSession).filter(models.GameSession.access_code == join_request.access_code.upper()).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session with that access code not found.")
+    
+    # Create a new player (User) record for this session
+    new_player = models.User(
+        display_name=join_request.display_name,
+        current_session_id=session.id
+    )
+    db.add(new_player)
+    db.commit()
+    db.refresh(new_player)
+    
+    # Broadcast the updated session state to everyone in the lobby
+    background_tasks.add_task(manager.broadcast_session_state, session.id, db)
+    
+    return {
+        "player": PlayerSchema.model_validate(new_player),
+        "session": GameSessionSchema.model_validate(session)
+    }
+
+@app.get("/users/", response_model=List[PlayerSchema])
 def read_all_users(db: Session = Depends(get_db)):
     """Returns a list of all users."""
     return db.query(models.User).all()
@@ -256,9 +324,13 @@ def create_character(character_input: CharacterCreate, db: Session = Depends(get
     db.add(new_character); db.commit(); db.refresh(new_character)
     return new_character
 
-@app.get("/users/{user_id}/characters/", response_model=List[CharacterSchema])
-def read_user_characters(user_id: int, db: Session = Depends(get_db)):
-    return db.query(models.Character).filter(models.Character.owner_id == user_id).all()
+@app.get("/users/{user_id}/characters", response_model=List[CharacterSchema])
+def get_user_characters(user_id: int, db: Session = Depends(get_db)):
+    """Fetches all character templates owned by a specific user."""
+    characters = db.query(models.Character).filter(models.Character.owner_id == user_id).all()
+    if not characters:
+        return []
+    return characters
 
 @app.post("/characters/{character_id}/learn_ability/", response_model=CharacterSchema)
 def learn_ability(character_id: int, ability_link: CharacterAbilityCreate, db: Session = Depends(get_db)):
@@ -286,20 +358,34 @@ def get_character_abilities(character_id: int, db: Session = Depends(get_db)):
     return abilities
 
 # --- SESSION ENDPOINTS ---
-@app.post("/sessions/", response_model=GameSessionSchema)
-def create_session(session_input: GameSessionCreate, db: Session = Depends(get_db)):
-    new_session = models.GameSession(campaign_name=session_input.campaign_name, gm_id=session_input.gm_id)
-    db.add(new_session); db.commit()
-    for char_id in session_input.character_ids:
-        char_template = db.query(models.Character).filter(models.Character.id == char_id).first()
-        if char_template:
-            session_char = models.SessionCharacter(
-                session_id=new_session.id, character_id=char_id,
-                current_prana=char_template.max_prana,
-                current_tapas=char_template.max_tapas, current_maya=char_template.max_maya
-            )
-            db.add(session_char)
-    db.commit(); db.refresh(new_session)
+@app.post("/sessions", response_model=GameSessionSchema)
+def create_session(session_input: GameSessionCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    SECRET_GM_CODE = os.getenv("GM_ACCESS_CODE")
+    if not SECRET_GM_CODE or session_input.gm_access_code != SECRET_GM_CODE:
+        raise HTTPException(status_code=403, detail="Invalid GM Access Code. Cannot create session.")
+
+    # Find the GM user record
+    gm_user = db.query(models.User).filter(models.User.id == session_input.gm_id).first()
+    if not gm_user:
+        raise HTTPException(status_code=404, detail="GM user not found.")
+
+    while True:
+        code = generate_access_code()
+        if not db.query(models.GameSession).filter(models.GameSession.access_code == code).first():
+            break
+
+    new_session = models.GameSession(
+        campaign_name=session_input.campaign_name, 
+        gm_id=session_input.gm_id,
+        access_code=code
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+    
+    
+    gm_user.current_session_id = new_session.id
+    db.commit()
     return new_session
 
 @app.get("/sessions/{session_id}/", response_model=GameSessionSchema)
@@ -308,6 +394,13 @@ def read_session(session_id: int, db: Session = Depends(get_db)):
     if not session: raise HTTPException(status_code=404, detail="Session not found")
     return session
 
+@app.get("/sessions/{session_id}/players", response_model=List[PlayerSchema])
+def get_session_players(session_id: int, db: Session = Depends(get_db)):
+    """Returns a list of all players currently in a session's lobby."""
+    players = db.query(models.User).filter(models.User.current_session_id == session_id).all()
+    if not players:
+        return []
+    return players
 
 @app.patch("/sessions/{session_id}/", response_model=GameSessionSchema)
 async def update_session(session_id: int, session_update: GameSessionUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -329,6 +422,70 @@ async def update_session(session_id: int, session_update: GameSessionUpdate, bac
     background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
 
     return updated_schema
+
+@app.post("/sessions/{session_id}/add_character", response_model=GameSessionSchema)
+async def add_character_to_session(session_id: int, request: AddCharacterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Adds a player's chosen character to the game session."""
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    character = db.query(models.Character).filter(models.Character.id == request.character_id).first()
+    player = db.query(models.User).filter(models.User.id == request.player_id).first()
+
+    if not all([session, character, player]):
+        raise HTTPException(status_code=404, detail="Session, Character, or Player not found.")
+
+    if character.owner_id != player.id:
+        raise HTTPException(status_code=403, detail="Player does not own this character.")
+
+    # Check if this player already has a character in the session
+    existing_participant = db.query(models.SessionCharacter).filter(
+        models.SessionCharacter.session_id == session_id,
+        models.SessionCharacter.player_id == request.player_id
+    ).first()
+
+    if existing_participant:
+        raise HTTPException(status_code=400, detail="Player already has a character in this session.")
+
+    # Create the new session participant
+    new_participant = models.SessionCharacter(
+        session_id=session_id,
+        character_id=request.character_id,
+        player_id=request.player_id,
+        current_prana=character.max_prana,
+        current_tapas=character.max_tapas,
+        current_maya=character.max_maya,
+        x_pos=None,
+        y_pos=None
+    )
+    db.add(new_participant)
+    db.commit()
+
+    # Broadcast the update to all connected clients
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    
+    return session
+
+@app.delete("/sessions/{session_id}/participants/{participant_id}", response_model=GameSessionSchema)
+async def remove_character_from_session(session_id: int, participant_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Removes a participant (SessionCharacter) from a game session."""
+    
+    # Find the specific participant record to delete
+    participant = db.query(models.SessionCharacter).filter(
+        models.SessionCharacter.session_id == session_id,
+        models.SessionCharacter.id == participant_id
+    ).first()
+
+    if not participant:
+        raise HTTPException(status_code=404, detail="Participant not found in this session.")
+
+    session = participant.session # Get a reference to the session before deleting
+
+    db.delete(participant)
+    db.commit()
+
+    # Broadcast the update to all connected clients
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    
+    return session
 
 @app.post("/sessions/{session_id}/begin_combat", response_model=GameSessionSchema)
 async def begin_combat(session_id: int, background_tasks: BackgroundTasks,db: Session = Depends(get_db)):
@@ -465,3 +622,19 @@ async def next_turn(session_id: int, background_tasks: BackgroundTasks, db: Sess
     background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
 
     return updated_schema
+
+@app.post("/sessions/{session_id}/end_combat", response_model=GameSessionSchema)
+async def end_combat(session_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Ends the current combat, switching the mode back to exploration."""
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.current_mode != 'combat':
+        raise HTTPException(status_code=400, detail="Session is not in combat.")
+
+    session.current_mode = 'exploration'
+    db.commit()
+
+    # Broadcast the updated state to all players
+    background_tasks.add_task(manager.broadcast_session_state, session.id, db)
+    return session

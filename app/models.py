@@ -3,10 +3,10 @@
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 from sqlalchemy.types import JSON
-import os # <--- ADD THIS IMPORT
-from dotenv import load_dotenv # <--- ADD THIS IMPORT
+import os 
+from dotenv import load_dotenv 
 
-load_dotenv() # <--- ADD THIS LINE to load the .env file
+load_dotenv() 
 
 # --- Database Setup ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -18,7 +18,9 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
+    display_name = Column(String, index=True)
+    current_session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=True)
+    characters = relationship("Character", back_populates="owner")
 
 class Ability(Base):
     __tablename__ = "abilities"
@@ -68,6 +70,7 @@ class SessionCharacter(Base):
     id = Column(Integer, primary_key=True, index=True)
     character_id = Column(Integer, ForeignKey("characters.id"))
     session_id = Column(Integer, ForeignKey("game_sessions.id"))
+    player_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     current_prana = Column(Integer)
     current_tapas = Column(Integer)
     current_maya = Column(Integer)
@@ -83,9 +86,10 @@ class GameSession(Base):
     id = Column(Integer, primary_key=True, index=True)
     gm_id = Column(Integer, ForeignKey("users.id"))
     campaign_name = Column(String)
-    current_mode = Column(String, default='exploration')
+    current_mode = Column(String, default='lobby')
     active_loka_resonance = Column(String, default='none')
     turn_order = Column(JSON, default=[])
     current_turn_index = Column(Integer, default=0)
     log = Column(JSON, default=[])
+    access_code = Column(String, unique=True, index=True, nullable=True)
     participants = relationship("SessionCharacter", back_populates="session")

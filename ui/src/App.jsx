@@ -1,216 +1,108 @@
-// ui/srcsrc/App.jsx
-import { useState, useEffect } from 'react';
+// ui/src/App.jsx (Definitive Fix)
+
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import CharacterCard from './components/CharacterCard';
-import CombatGrid from './components/CombatGrid';
-import InitiativeTracker from './components/InitiativeTracker';
-import ActionPanel from './components/ActionPanel';
-import GameLog from './components/GameLog';
+import GameRoom from './components/GameRoom';
+import HomePage from './components/HomePage';
+import Lobby from './components/Lobby';
 import './App.css';
 
-const IS_GM = true;
-const CURRENT_USER_ID = 2;
-
 function App() {
-    const [sessionData, setSessionData] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
-    const [selectedAction, setSelectedAction] = useState({ type: 'none', ability: null });
-    const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
-    const [turnActions, setTurnActions] = useState({ hasAttacked: false });
+  // We only need state for the core data. The UI will be derived from this.
+  const [sessionData, setSessionData] = useState(null);
+  const [playerData, setPlayerData] = useState(null);
+  const [error, setError] = useState('');
 
-    const activeParticipant = sessionData?.turn_order?.length > 0 ? sessionData.participants.find(p => p.id === sessionData.turn_order[sessionData.current_turn_index]) : null;
-    const isMyTurn = activeParticipant && (activeParticipant.character.owner_id === CURRENT_USER_ID || IS_GM);
+  // Effect #1: Load initial state from localStorage on startup.
+  useEffect(() => {
+    const savedSession = localStorage.getItem('vyuhaSession');
+    const savedPlayer = localStorage.getItem('vyuhaPlayer');
+    if (savedSession && savedPlayer) {
+      setSessionData(JSON.parse(savedSession));
+      setPlayerData(JSON.parse(savedPlayer));
+    }
+  }, []); // Runs only once.
 
-    const fetchSessionData = async () => {
-        try {
-            const response = await axios.get('http://localhost:8000/sessions/1/');
-            setSessionData(response.data);
-        } catch (err) {
-            setError('Failed to load. Is backend running & DB seeded?');
-        } finally {
-            setLoading(false);
-        }
+  // Effect #2: Manage the WebSocket connection. Its ONLY job is to update sessionData.
+  useEffect(() => {
+    // Don't connect until we have the necessary IDs.
+    if (!sessionData?.id || !playerData?.id) return;
+
+    const ws = new WebSocket(`ws://localhost:8000/ws/${sessionData.id}/${playerData.id}`);
+    ws.onopen = () => console.log("WebSocket Connected!");
+    ws.onmessage = (event) => {
+      const updatedSessionData = JSON.parse(event.data);
+      console.log("Received server update. New mode:", updatedSessionData.current_mode);
+      
+      // Update the single source of truth. This triggers a re-render.
+      setSessionData(updatedSessionData); 
+      localStorage.setItem('vyuhaSession', JSON.stringify(updatedSessionData));
     };
+    ws.onerror = (err) => console.error("WebSocket Error:", err);
+    ws.onclose = () => console.log("WebSocket Closed.");
 
-    useEffect(() => { fetchSessionData(); }, []);
+    return () => ws.close();
+  }, [sessionData?.id, playerData?.id]); // Reconnects only if the session/player fundamentally changes.
 
-    
-    useEffect(() => {
-        if (activeParticipant) {
-            const fetchAbilities = async () => {
-                const res = await axios.get(`http://localhost:8000/characters/${activeParticipant.character.id}/abilities/`);
-                setActiveCharacterAbilities(res.data);
-            };
-            fetchAbilities();
-        }
-    }, [activeParticipant]);
-    
-    
-    useEffect(() => {
-        // We don't want to connect until we have a session ID from our initial fetch.
-        if (!sessionData?.id) return;
+  // --- HANDLER FUNCTIONS ---
+  // These functions now ONLY handle API calls and update the state. They no longer control the view.
+  const handleCreateSession = async (campaignName, gmDisplayName, gmAccessCode) => {
+    try {
+      const gmUserRes = await axios.post('http://localhost:8000/users/', { display_name: gmDisplayName });
+      const gm = gmUserRes.data;
+      const sessionRes = await axios.post('http://localhost:8000/sessions', {
+        campaign_name: campaignName,
+        gm_id: gm.id,
+        gm_access_code: gmAccessCode
+      });
+      const session = sessionRes.data;
+      
+      // Update our state. The render logic below will automatically show the lobby.
+      setPlayerData(gm);
+      setSessionData(session);
+      localStorage.setItem('vyuhaPlayer', JSON.stringify(gm));
+      localStorage.setItem('vyuhaSession', JSON.stringify(session));
+    } catch (err) {
+      const errorMsg = err.response?.data?.detail || 'Failed to create session.';
+      setError(errorMsg);
+    }
+  };
 
-        // Construct the WebSocket URL. 'ws://' is the standard for non-secure WebSockets.
-        const ws = new WebSocket(`ws://localhost:8000/ws/${sessionData.id}/${CURRENT_USER_ID}`);
+  const handleJoinSession = async (accessCode, displayName) => {
+    try {
+      const response = await axios.post('http://localhost:8000/join', { access_code: accessCode, display_name: displayName });
+      const { player, session } = response.data;
+      
+      // Update our state. The render logic below will automatically show the lobby.
+      setPlayerData(player);
+      setSessionData(session);
+      localStorage.setItem('vyuhaPlayer', JSON.stringify(player));
+      localStorage.setItem('vyuhaSession', JSON.stringify(session));
+    } catch (err) {
+      setError('Failed to join session. Check the code and try again.');
+    }
+  };
 
-        ws.onopen = () => {
-            console.log("WebSocket connection established.");
-        };
+  // --- RENDER LOGIC ---
+  // This is the new, robust state machine. It derives the view directly from the data.
+  if (!sessionData || !playerData) {
+    // If we have no session data, we must be on the home page.
+    return <HomePage onCreateSession={handleCreateSession} onJoinSession={handleJoinSession} error={error} />;
+  }
 
-        // This is the most important part.
-        // When the server broadcasts a message, this function is called.
-        ws.onmessage = (event) => {
-            console.log("Received update from server!");
-            const updatedSessionData = JSON.parse(event.data);
-            
-            // This one line replaces the state with the new, authoritative state from the server.
-            // This is now the ONLY place where sessionData should be updated after an action.
-            setSessionData(updatedSessionData);
-        };
+  if (sessionData.current_mode === 'lobby') {
+    // If the session mode is 'lobby', show the lobby.
+    return <Lobby sessionData={sessionData} playerData={playerData} />;
+  }
 
-        ws.onerror = (error) => {
-            console.error("WebSocket Error:", error);
-            setError("Live connection to server failed.");
-        };
+  if (['exploration', 'staging', 'combat'].includes(sessionData.current_mode)) {
+    // If the mode is any of the in-game modes, show the game room.
+    const isGM = playerData.id === sessionData.gm_id;
+    return <GameRoom sessionData={sessionData} currentUser={playerData} isGM={isGM} />;
+  }
 
-        ws.onclose = () => {
-            console.log("WebSocket connection closed.");
-        };
-
-        // This is a "cleanup" function. React runs it when the component
-        // unmounts to make sure we close the connection and prevent errors.
-        return () => {
-            ws.close();
-        };
-
-    
-    }, [sessionData?.id]);
-    
-
-    const performAction = async (actionPayload) => {
-        try {
-            const response = await axios.post('http://localhost:8000/sessions/1/action', actionPayload);
-
-            if (actionPayload.action_type === 'ATTACK') {
-              setTurnActions(prev => ({ ...prev, hasAttacked: true }));
-            }
-        } catch (err) {
-            const errorMsg = err.response?.data?.detail || "An unknown error occurred.";
-            console.error("Action failed:", errorMsg);
-        }
-        setSelectedAction({ type: 'none', ability: null });
-    };
-
-    // --- All functions below are modified to remove manual setSessionData calls ---
-
-    const handlePrepareForCombat = async () => {
-        // We still make the request...
-        await axios.patch('http://localhost:8000/sessions/1/', { current_mode: 'staging' });
-        // ...but we DELETE the line that sets the state. The WebSocket will handle it.
-        // const res = ...; setSessionData(res.data); // <-- DELETE
-    };
-
-    const handleBeginCombat = async () => {
-        if (!IS_GM) return;
-        try {
-            await axios.post('http://localhost:8000/sessions/1/begin_combat');
-            // setSessionData(response.data); // <-- DELETE
-        } catch (err) {
-            console.error("Failed to begin combat", err);
-        }
-    };
-    
-    const handleEndCombat = async () => {
-        if (!IS_GM) return;
-        try {
-            await axios.patch('http://localhost:8000/sessions/1/', { current_mode: 'exploration' });
-            // setSessionData(response.data); // <-- DELETE
-        } catch (err) {
-            console.error("Failed to end combat", err);
-        }
-    };
-    
-    const handleEndTurn = async () => {
-        setSelectedAction({ type: 'none', ability: null });
-        setTurnActions({ hasAttacked: false });
-        await axios.post('http://localhost:8000/sessions/1/next_turn');
-        // const res = ...; setSessionData(res.data); // <-- DELETE
-    };
-
-    if (loading) return <div>Loading...</div>;
-    if (error) return <div style={{ color: 'red' }}>{error}</div>;
-    if (!sessionData) return <div>No session data. Run seed script and refresh.</div>;
-
-    return (
-        <div className="game-room">
-            <h1>Vyuha VTT</h1>
-            <h2>{sessionData.campaign_name}</h2>
-
-            {sessionData.current_mode === 'exploration' && (
-                /* ... (No changes to JSX) ... */
-                <div className="exploration-view">
-                    {IS_GM && <button onClick={handlePrepareForCombat}>Prepare for Combat</button>}
-                    <h3>Participants</h3>
-                    <div className="participants-grid">{sessionData.participants.map((p) => (<CharacterCard key={p.id} participant={p} />))}</div>
-                </div>
-            )}
-
-            {sessionData.current_mode === 'staging' && (
-                <div className="staging-view">
-                    <h3>Staging Phase: Place Heroes!</h3>
-                    {IS_GM && <button onClick={handleBeginCombat}>Begin Combat!</button>}
-                    <CombatGrid
-                        participants={sessionData.participants}
-                        onTokenMove={async (pId, x, y) => {
-                            // This is an inline function, but the same logic applies.
-                            // We make the request...
-                            await axios.patch(`http://localhost:8000/sessions/1/`, { participant_positions: [{ participant_id: pId, x_pos: x, y_pos: y }]});
-                            // ...and we no longer need to manually update state here.
-                            // const res = ...; setSessionData(res.data); // <-- DELETE
-                        }}
-                        isGM={IS_GM}
-                    />
-                </div>
-            )}
-
-            {sessionData.current_mode === 'combat' && (
-                /* ... (No changes to JSX) ... */
-                <div className="combat-view">
-                    <div className="combat-main-panel">
-                        <h3>COMBAT! {selectedAction.type !== 'none' && `(SELECT A ${selectedAction.type === 'MOVE' ? 'SQUARE' : 'TARGET'})`}</h3>
-                        <CombatGrid
-                            participants={sessionData.participants}
-                            activeParticipantId={activeParticipant?.id}
-                            onGridClick={(x, y) => { if (selectedAction.type === 'MOVE' && isMyTurn) performAction({ actor_id: activeParticipant.id, action_type: 'MOVE', new_x: x, new_y: y })}}
-                            onTokenClick={(targetId) => { if (selectedAction.type === 'TARGETING' && isMyTurn) performAction({ actor_id: activeParticipant.id, action_type: 'ATTACK', target_id: targetId, ability_id: selectedAction.ability.id })}}
-                            isGM={false}
-                            showMovementFor={selectedAction.type === 'MOVE' && isMyTurn ? activeParticipant : null}
-                        />
-                    </div>
-                    <div className="combat-side-panel">
-                        <InitiativeTracker participants={sessionData.participants} turnOrder={sessionData.turn_order} currentTurnIndex={sessionData.current_turn_index} />
-                        <ActionPanel
-                            abilities={activeCharacterAbilities}
-                            onSelectMove={() => setSelectedAction({ type: 'MOVE' })}
-                            onSelectAbility={(ability) => setSelectedAction({ type: 'TARGETING', ability })}
-                            onEndTurn={handleEndTurn}
-                            isMyTurn={isMyTurn}
-                            selectedAction={selectedAction}
-                            activeParticipant={activeParticipant}
-                            turnActions={turnActions}
-                        />
-                        <GameLog messages={sessionData.log || []} />
-                        {IS_GM && (
-                            <div className="gm-controls-combat">
-                              <button onClick={handleEndCombat}>End Combat</button>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
-        </div>
-    );
+  // Fallback for any unknown state
+  return <div>Loading...</div>;
 }
 
 export default App;

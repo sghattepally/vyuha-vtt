@@ -1,4 +1,5 @@
-// ui/src/components/ActionPanel.jsx
+// ui/src/components/ActionPanel.jsx (Corrected)
+
 import React from 'react';
 
 function ActionPanel({ abilities, onSelectMove, onSelectAbility, onEndTurn, isMyTurn, selectedAction, activeParticipant, turnActions = {} }) {
@@ -35,7 +36,10 @@ function ActionPanel({ abilities, onSelectMove, onSelectAbility, onEndTurn, isMy
         >
           Move
         </button>
-        {abilities.map(ability => (
+        
+        {/* --- THIS IS THE FIX --- */}
+        {/* Ensure we check that abilities is an array before mapping */}
+        {Array.isArray(abilities) && abilities.map(ability => (
           <button 
             key={ability.id} 
             onClick={() => onSelectAbility(ability)} 
@@ -45,6 +49,8 @@ function ActionPanel({ abilities, onSelectMove, onSelectAbility, onEndTurn, isMy
             {ability.name}
           </button>
         ))}
+        {/* ----------------------- */}
+
       </div>
       <button className="end-turn-button" onClick={onEndTurn}>End Turn</button>
     </div>

@@ -1,11 +1,8 @@
-// ui/src/components/InitiativeTracker.jsx
+// ui/src/components/InitiativeTracker.jsx (Corrected)
+
 import React from 'react';
 
 function InitiativeTracker({ participants, turnOrder, currentTurnIndex }) {
-  const sortedParticipants = turnOrder.map(participantId => 
-    participants.find(p => p.id === participantId)
-  );
-  
   // A safety check in case the data isn't ready yet
   if (!turnOrder || turnOrder.length === 0) {
     return (
@@ -15,20 +12,30 @@ function InitiativeTracker({ participants, turnOrder, currentTurnIndex }) {
         </div>
     );
   }
-
+  
+  // Create a map for quick lookups
+  const participantMap = new Map(participants.map(p => [p.id, p]));
   const activeParticipantId = turnOrder[currentTurnIndex];
 
   return (
     <div className="initiative-tracker">
       <h3>Turn Order</h3>
       <ol>
-        {sortedParticipants.map(participant => (
-          participant && ( // Another safety check
+        {turnOrder.map(participantId => {
+          const participant = participantMap.get(participantId);
+          if (!participant) return null; // Safety check for missing participant data
+
+          return (
             <li key={participant.id} className={participant.id === activeParticipantId ? 'active-turn' : ''}>
-              {participant.character.name}
+              {/* --- THIS IS THE NEW DISPLAY LOGIC --- */}
+              {participant.character.name} 
+              <span className="hp-tracker">
+                ({participant.current_prana}/{participant.character.max_prana})
+              </span>
+              {/* ------------------------------------ */}
             </li>
-          )
-        ))}
+          );
+        })}
       </ol>
     </div>
   );
