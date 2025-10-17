@@ -322,6 +322,29 @@ def create_character(character_input: CharacterCreate, db: Session = Depends(get
     }
     new_character = models.Character(**character_data)
     db.add(new_character); db.commit(); db.refresh(new_character)
+    DEFAULT_ABILITIES = {
+        "Yodha": "Gada Strike",
+        "Dhanurdhara": "Longbow Shot",
+        "Chara": "Dagger Strike",
+        "Rishi": "Agni Mantra",
+        "Sutradhara": "Dagger Strike"
+    }
+    
+    ability_name_to_learn = DEFAULT_ABILITIES.get(new_character.character_class)
+    
+    if ability_name_to_learn:
+        # Find the ability in the database
+        ability_to_learn = db.query(models.Ability).filter(models.Ability.name == ability_name_to_learn).first()
+        
+        if ability_to_learn:
+            # Create the link between the new character and the ability
+            new_link = models.CharacterAbility(
+                character_id=new_character.id, 
+                ability_id=ability_to_learn.id
+            )
+            db.add(new_link)
+            db.commit()
+            print(f"Assigned '{ability_name_to_learn}' to new character '{new_character.name}'")
     return new_character
 
 @app.get("/users/{user_id}/characters", response_model=List[CharacterSchema])
