@@ -1,21 +1,29 @@
 import React from 'react';
 
-function Panel({ title, children, onToggleCollapse }) {
-  // We derive the collapsed state from the parent's layout state, not props
+function Panel({ title, children, onCollapse, isCollapsed }) {
   return (
     <div className="panel">
       <div className="panel-header">
         <h3>{title}</h3>
-        {onToggleCollapse && (
-          <button onClick={onToggleCollapse}>
-            {/* The character can be changed based on state if needed */}
-            −
+        {/*
+          This now checks for the onCollapse function.
+          The button's text will change based on the isCollapsed prop.
+        */}
+        {onCollapse && (
+          <button className="panel-collapse-button" onClick={onCollapse}>
+            {isCollapsed ? '＋' : '−'}
           </button>
         )}
       </div>
-      <div className="panel-content">
-        {children}
-      </div>
+      {/*
+        The content is now conditionally rendered so it doesn't take up
+        space in the DOM when the panel is collapsed.
+      */}
+      {!isCollapsed && (
+        <div className="panel-content">
+          {children}
+        </div>
+      )}
     </div>
   );
 }

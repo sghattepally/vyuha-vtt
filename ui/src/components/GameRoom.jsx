@@ -9,56 +9,57 @@ import GameLog from './GameLog';
 import CharacterCard from './CharacterCard';
 import Token from './Token';
 
+const initialLayout = [
+    { i: 'party', x: 0, y: 0, w: 12, h: 3, minW: 3, minH: 3 },
+    { i: 'log', x: 9, y: 3, w: 3, h: 9, minW: 2, minH: 4 },
+    { i: 'main', x: 3, y: 3, w: 6, h: 9, minW: 4, minH: 5 },
+    { i: 'context', x: 0, y: 3, w: 3, h: 9, minW: 2, minH: 5 },
+  ];
+const COLLAPSED_HEIGHT = 1;
+
 function GameRoom({ sessionData, currentUser, isGM }) {
   const [selectedAction, setSelectedAction] = useState({ type: 'none', ability: null });
   const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
   const [turnActions, setTurnActions] = useState({ hasAttacked: false });
   const [isNpcManagerOpen, setIsNpcManagerOpen] = useState(false);
-
-  // --- Layout State Management ---
-  const [layout, setLayout] = useState([
-    { i: 'party', x: 0, y: 0, w: 12, h: 3, minW: 3, minH: 3 },
-    { i: 'log', x: 9, y: 3, w: 3, h: 9, minW: 2, minH: 4 },
-    { i: 'main', x: 3, y: 3, w: 6, h: 9, minW: 4, minH: 5 },
-    { i: 'context', x: 0, y: 3, w: 3, h: 9, minW: 2, minH: 5 },
-  ]);
+  const [layout, setLayout] = useState(initialLayout);
   const originalLayouts = useRef({});
-
   const handleLayoutChange = (newLayout) => {
-    // This logic prevents resizing/dragging from breaking the collapse state
-    const updatedLayout = newLayout.map(newItem => {
-        const existingItem = layout.find(item => item.i === newItem.i);
-        if (existingItem && existingItem.h === 1) {
-            return { ...newItem, h: 1, minH: 1 }; // Keep it collapsed
-        }
-        return newItem;
-    });
-    setLayout(updatedLayout);
+    setLayout(newLayout);
   };
-const COLLAPSED_HEIGHT = 1;
+
 
 const togglePanelCollapse = (panelKey) => {
-  setLayout(prevLayout => {
-    // Create a new array to ensure React triggers a re-render
-    const newLayout = prevLayout.map(panel => {
+  setLayout(prevLayout =>
+    prevLayout.map(panel => {
       if (panel.i === panelKey) {
-        // Create a new panel object for immutability
-        const newPanel = { ...panel };
+        const isCollapsed = panel.h === COLLAPSED_HEIGHT;
 
-        if (panel.h !== COLLAPSED_HEIGHT) {
-          // If not collapsed, store original height and collapse it
-          newPanel.original_h = panel.h; // Store the height
-          newPanel.h = COLLAPSED_HEIGHT;
+        if (isCollapsed) {
+          // If it IS collapsed, restore it using the saved layout.
+          const original = originalLayouts.current[panelKey];
+          return {
+            ...panel,
+            h: original ? original.h : 3, // Restore height
+            minH: original ? original.minH : 3, // Restore minHeight
+            maxH: undefined, // Allow resizing again
+          };
         } else {
-          // If collapsed, restore it to its original height or a default
-          newPanel.h = newPanel.original_h || 3; // Restore or use a default
+          // *** THIS IS THE FIX ***
+          // If it is NOT collapsed, save its current state BEFORE collapsing.
+          originalLayouts.current[panelKey] = { ...panel };
+
+          return {
+            ...panel,
+            h: COLLAPSED_HEIGHT,
+            minH: COLLAPSED_HEIGHT,
+            maxH: COLLAPSED_HEIGHT, // Prevent resizing while collapsed
+          };
         }
-        return newPanel;
       }
       return panel;
-    });
-    return newLayout;
-  });
+    })
+  );
 };
 
   const handlePrepareForCombat = async () => {
@@ -172,9 +173,11 @@ const effectiveIsGM = isGM || isGmOverride;
         width={window.innerWidth} // Make it responsive to window size
         onLayoutChange={handleLayoutChange}
         draggableHandle=".panel-header"
+        draggableCancel=".panel-collapse-button"
       >
         <div key="party">
-          <Panel title="Party" onToggleCollapse={() => togglePanelCollapse('party')}>
+          <Panel title="Party" onCollapse={() => togglePanelCollapse('party')}
+  isCollapsed={layout.find(p => p.i === 'party')?.h === COLLAPSED_HEIGHT}>
             <div className="participants-grid-horizontal">
               {sessionData.participants.map((p) => (<CharacterCard key={p.id} participant={p} />))}
             </div>
@@ -182,13 +185,15 @@ const effectiveIsGM = isGM || isGmOverride;
         </div>
         
         <div key="log">
-          <Panel title="Game Log" onToggleCollapse={() => togglePanelCollapse('log')}>
+          <Panel title="Game Log" onCollapse={() => togglePanelCollapse('log')}
+  isCollapsed={layout.find(p => p.i === 'log')?.h === COLLAPSED_HEIGHT}>
             <GameLog messages={sessionData.log || []} />
           </Panel>
         </div>
 
         <div key="main">
-          <Panel title="The World" onToggleCollapse={() => togglePanelCollapse('main')}>
+          <Panel title="The World" onCollapse={() => togglePanelCollapse('main')}
+  isCollapsed={layout.find(p => p.i === 'main')?.h === COLLAPSED_HEIGHT}>
             
             
             {sessionData.current_mode === 'exploration' && (
@@ -220,7 +225,8 @@ const effectiveIsGM = isGM || isGmOverride;
         </div>
 
         <div key="context">
-          <Panel title="Context" onToggleCollapse={() => togglePanelCollapse('context')}>
+          <Panel title="Context" onCollapse={() => togglePanelCollapse('context')}
+  isCollapsed={layout.find(p => p.i === 'context')?.h === COLLAPSED_HEIGHT}>
             {sessionData.current_mode === 'combat' ? (
                 <>
                     <InitiativeTracker participants={sessionData.participants} turnOrder={sessionData.turn_order} currentTurnIndex={sessionData.current_turn_index} />

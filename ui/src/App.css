@@ -528,6 +528,26 @@ body {
   padding: 0.5rem 1rem;
   background-color: #333;
   cursor: move;
+  user-select: none;
+}
+
+.panel-collapse-button {
+  background-color: #555; /* A slightly lighter color than the header */
+  border: 1px solid #777;
+  border-radius: 4px;
+  color: #eee;
+  font-size: 1.2rem;
+  line-height: 1; /* Helps with vertical alignment */
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  cursor: pointer; 
+  margin-left: auto; 
+}
+
+.panel-collapse-button:hover {
+  background-color: #666;
+  border-color: #888;
 }
 
 .panel-header h3 {
