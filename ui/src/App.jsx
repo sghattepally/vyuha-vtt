@@ -11,6 +11,7 @@ function App() {
   // We only need state for the core data. The UI will be derived from this.
   const [sessionData, setSessionData] = useState(null);
   const [playerData, setPlayerData] = useState(null);
+  const [isGmOverride, setIsGmOverride] = useState(false);
   const [error, setError] = useState('');
 
   // Effect #1: Load initial state from localStorage on startup.
@@ -98,7 +99,27 @@ function App() {
   if (['exploration', 'staging', 'combat'].includes(sessionData.current_mode)) {
     // If the mode is any of the in-game modes, show the game room.
     const isGM = playerData.id === sessionData.gm_id;
-    return <GameRoom sessionData={sessionData} currentUser={playerData} isGM={isGM} />;
+    return (
+      <>
+        {/* --- ADD THE TOGGLE BUTTON --- */}
+        <div className="gm-toggle">
+          <label>
+            <input 
+              type="checkbox" 
+              checked={isGmOverride} 
+              onChange={() => setIsGmOverride(prev => !prev)} 
+            />
+            GM View
+          </label>
+        </div>
+        <GameRoom 
+          sessionData={sessionData} 
+          currentUser={playerData} 
+          isGM={isGM}
+          isGmOverride={isGmOverride} // Pass the override state down
+        />
+      </>
+    );
   }
 
   // Fallback for any unknown state

@@ -571,3 +571,67 @@ body {
   min-width: 200px;
   flex-shrink: 0;
 }
+
+.gm-controls {
+  padding: 0 1rem 1rem 1rem;
+}
+.placeholder-text {
+  padding: 1rem;
+  color: #888;
+}
+
+.gm-toggle {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  background: rgba(0,0,0,0.7);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 6px;
+  z-index: 2000;
+  font-size: 0.9rem;
+}
+
+.npc-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.npc-list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.gm-lobby-controls {
+  margin-top: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.manage-npc-button {
+  width: 100%;
+  padding: 0.8rem;
+  font-size: 1rem;
+  background-color: #3a3a3a;
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.npc-list-item label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  cursor: pointer;
+}
+
+.npc-list-item input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}

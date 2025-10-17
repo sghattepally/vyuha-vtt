@@ -3,12 +3,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import CharacterCreator from './CharacterCreator'; // Import the new component
+import NpcManager from './NpcManager';
 
 function Lobby({ sessionData, playerData }) {
   const [playersInLobby, setPlayersInLobby] = useState([]);
   const [myCharacters, setMyCharacters] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isCreating, setIsCreating] = useState(false); // State to control the modal
+  const [isNpcManagerOpen, setIsNpcManagerOpen] = useState(false);
 
   const isGM = !!(playerData && sessionData && playerData.id === sessionData.gm_id);
 
@@ -95,6 +97,13 @@ const handleDeselectCharacter = async () => {
           onClose={() => setIsCreating(false)}
         />
       )}
+      {isNpcManagerOpen && (
+        <NpcManager
+          gmId={playerData.id}
+          sessionId={sessionData.id}
+          onClose={() => setIsNpcManagerOpen(false)}
+        />
+      )}
     <div className="lobby-page">
       <h1>Campaign: {sessionData.campaign_name}</h1>
       <h2>Lobby</h2>
@@ -162,9 +171,17 @@ const handleDeselectCharacter = async () => {
         )}
 
       {isGM && (
+        <div className="gm-lobby-controls">
+        <button onClick={() => setIsCreating(true)} className="manage-npc-button">
+            Create NPC Template
+          </button>
+        <button onClick={() => setIsNpcManagerOpen(true)} className="manage-npc-button">
+              Manage NPCs
+            </button>
         <button onClick={handleStartGame} className="start-game-button">
           Start Game
         </button>
+      </div>
       )}
       {!isGM && !myParticipantEntry && <p>Select a character to be ready.</p>}
       {!isGM && myParticipantEntry && <p className="waiting-text">Waiting for the GM to start the game...</p>}

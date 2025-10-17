@@ -153,6 +153,9 @@ class ActionResponse(pydantic.BaseModel):
     session: GameSessionSchema
     message: str
 
+class AddNpcsRequest(pydantic.BaseModel):
+    character_ids: List[int] # Expects a list of IDs
+
 # ==================================
 # 4. The FastAPI App Instance & CORS
 # ==================================
@@ -448,41 +451,53 @@ async def update_session(session_id: int, session_update: GameSessionUpdate, bac
 
 @app.post("/sessions/{session_id}/add_character", response_model=GameSessionSchema)
 async def add_character_to_session(session_id: int, request: AddCharacterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """Adds a player's chosen character to the game session."""
+    """
+    Adds a character to the game session.
+    - If added by a player, enforces a 1-character limit.
+    - If added by the GM, bypasses the limit and adds as an NPC (player_id=NULL).
+    """
     session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
     character = db.query(models.Character).filter(models.Character.id == request.character_id).first()
-    player = db.query(models.User).filter(models.User.id == request.player_id).first()
+    requesting_user = db.query(models.User).filter(models.User.id == request.player_id).first()
 
-    if not all([session, character, player]):
-        raise HTTPException(status_code=404, detail="Session, Character, or Player not found.")
+    if not all([session, character, requesting_user]):
+        raise HTTPException(status_code=404, detail="Session, Character, or Requesting User not found.")
 
-    if character.owner_id != player.id:
-        raise HTTPException(status_code=403, detail="Player does not own this character.")
+    # --- THIS IS THE NEW LOGIC ---
+    is_request_from_gm = (session.gm_id == requesting_user.id)
 
-    # Check if this player already has a character in the session
-    existing_participant = db.query(models.SessionCharacter).filter(
-        models.SessionCharacter.session_id == session_id,
-        models.SessionCharacter.player_id == request.player_id
-    ).first()
-
-    if existing_participant:
-        raise HTTPException(status_code=400, detail="Player already has a character in this session.")
-
-    # Create the new session participant
+    # For a regular player, check ownership and the 1-character limit
+    if not is_request_from_gm:
+        if character.owner_id != requesting_user.id:
+            raise HTTPException(status_code=403, detail="Player does not own this character.")
+        
+        existing_participant = db.query(models.SessionCharacter).filter(
+            models.SessionCharacter.session_id == session_id,
+            models.SessionCharacter.player_id == request.player_id
+        ).first()
+        if existing_participant:
+            raise HTTPException(status_code=400, detail="Player already has a character in this session.")
+    
+    # If the request is from the GM, they must own the character template
+    elif is_request_from_gm and character.owner_id != session.gm_id:
+         raise HTTPException(status_code=403, detail="GM does not own this character template.")
+    
     new_participant = models.SessionCharacter(
         session_id=session_id,
         character_id=request.character_id,
-        player_id=request.player_id,
+        # If the GM is adding the character, it's an NPC, so player_id is None.
+        player_id=None if is_request_from_gm else request.player_id,
         current_prana=character.max_prana,
         current_tapas=character.max_tapas,
         current_maya=character.max_maya,
         x_pos=None,
         y_pos=None
     )
+    # ---------------------------
+
     db.add(new_participant)
     db.commit()
 
-    # Broadcast the update to all connected clients
     background_tasks.add_task(manager.broadcast_session_state, session_id, db)
     
     return session
@@ -660,4 +675,39 @@ async def end_combat(session_id: int, background_tasks: BackgroundTasks, db: Ses
 
     # Broadcast the updated state to all players
     background_tasks.add_task(manager.broadcast_session_state, session.id, db)
+    return session
+
+@app.post("/sessions/{session_id}/add_npcs", response_model=GameSessionSchema)
+async def add_npcs_to_session(session_id: int, request: AddNpcsRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """GM-only endpoint to add multiple NPCs to a session at once."""
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    # Fetch all requested character templates in one query for efficiency
+    character_templates = db.query(models.Character).filter(models.Character.id.in_(request.character_ids)).all()
+    
+    # Verify the GM owns all of them
+    for char in character_templates:
+        if char.owner_id != session.gm_id:
+            raise HTTPException(status_code=403, detail=f"GM does not own character template: {char.name}")
+
+    new_npcs = []
+    for char in character_templates:
+        new_npc = models.SessionCharacter(
+            session_id=session.id,
+            character_id=char.id,
+            player_id=None,
+            current_prana=char.max_prana,
+            current_tapas=char.max_tapas,
+            current_maya=char.max_maya,
+            x_pos=None,
+            y_pos=None
+        )
+        new_npcs.append(new_npc)
+
+    db.add_all(new_npcs)
+    db.commit()
+
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
     return session

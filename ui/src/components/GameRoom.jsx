@@ -1,84 +1,60 @@
-// ui/src/components/GameRoom.jsx
-
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import GridLayout from 'react-grid-layout';
+import Panel from './Panel';
 import CombatGrid from './CombatGrid';
 import InitiativeTracker from './InitiativeTracker';
 import ActionPanel from './ActionPanel';
 import GameLog from './GameLog';
 import CharacterCard from './CharacterCard';
-import Panel from './Panel';
 import Token from './Token';
 
 function GameRoom({ sessionData, currentUser, isGM }) {
   const [selectedAction, setSelectedAction] = useState({ type: 'none', ability: null });
-const [layout, setLayout] = useState([
-    { i: 'avatars', x: 0, y: 0, w: 3, h: 4, minW: 2, minH: 3 },
-    { i: 'log', x: 9, y: 0, w: 3, h: 10, minW: 2, minH: 4 },
-    { i: 'actions', x: 0, y: 4, w: 3, h: 6, minW: 2, minH: 4 },
-    { i: 'grid', x: 3, y: 0, w: 6, h: 10, minW: 4, minH: 6 },
+  const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
+  const [turnActions, setTurnActions] = useState({ hasAttacked: false });
+  const [isNpcManagerOpen, setIsNpcManagerOpen] = useState(false);
+
+  // --- Layout State Management ---
+  const [layout, setLayout] = useState([
+    { i: 'party', x: 0, y: 0, w: 12, h: 3, minW: 3, minH: 3 },
+    { i: 'log', x: 9, y: 3, w: 3, h: 9, minW: 2, minH: 4 },
+    { i: 'main', x: 3, y: 3, w: 6, h: 9, minW: 4, minH: 5 },
+    { i: 'context', x: 0, y: 3, w: 3, h: 9, minW: 2, minH: 5 },
   ]);
   const originalLayouts = useRef({});
-const [collapsedPanels, setCollapsedPanels] = useState({
-      avatars: false,
-      log: false,
-      actions: false,
-      grid: false,
-  });
 
   const handleLayoutChange = (newLayout) => {
-    const isResizingOrDragging = newLayout.some(item => item.isDraggable || item.isResizable);
-    if (!isResizingOrDragging) {
-        setLayout(newLayout);
-    }
+    // This logic prevents resizing/dragging from breaking the collapse state
+    const updatedLayout = newLayout.map(newItem => {
+        const existingItem = layout.find(item => item.i === newItem.i);
+        if (existingItem && existingItem.h === 1) {
+            return { ...newItem, h: 1, minH: 1 }; // Keep it collapsed
+        }
+        return newItem;
+    });
+    setLayout(updatedLayout);
   };
 
   const togglePanelCollapse = (panelId) => {
-    // 1. Determine the new state based on the current 'collapsedPanels' state.
-    // We use the functional update form for safety, even though it's technically 
-    // outside the scope of this setLayout dependency issue.
-    setCollapsedPanels(prev => {
-        const isCurrentlyCollapsed = prev[panelId];
-        const willBeCollapsed = !isCurrentlyCollapsed;
+    setLayout(currentLayout => {
+      const panelIndex = currentLayout.findIndex(item => item.i === panelId);
+      if (panelIndex === -1) return currentLayout;
+      
+      const newLayout = [...currentLayout];
+      const panelLayout = newLayout[panelIndex];
+      const originalSpec = layout.find(l => l.i === panelId);
 
-        // 2. Queue the layout update using the *derived* new state (willBeCollapsed)
-        setLayout(currentLayout => {
-          const panelIndex = currentLayout.findIndex(item => item.i === panelId);
-          if (panelIndex === -1) return currentLayout;
-          
-          const newLayout = [...currentLayout];
-          const panelLayout = newLayout[panelIndex];
-          
-          if (willBeCollapsed) { // Collapse it: New height is 1
-            // Save the current expanded height *before* collapsing it.
-            originalLayouts.current[panelId] = panelLayout.h;
-            newLayout[panelIndex] = { ...panelLayout, h: 1, minH: 1 };
-          } else { // Expand it: Restore original height
-            const originalHeight = originalLayouts.current[panelId] || 4;
-            
-            // Re-find the original minH for proper grid resizing
-            const initialLayoutItem = [ 
-                { i: 'avatars', minH: 3 }, 
-                { i: 'log', minH: 4 }, 
-                { i: 'actions', minH: 4 }, 
-                { i: 'grid', minH: 6 }
-            ].find(l => l.i === panelId);
-
-            const originalMinHeight = initialLayoutItem ? initialLayoutItem.minH : 2;
-
-            newLayout[panelIndex] = { ...panelLayout, h: originalHeight, minH: originalMinHeight };
-          }
-          return newLayout;
-        });
-
-        // 3. Return the new collapsedPanels state
-        return {
-            ...prev,
-            [panelId]: willBeCollapsed,
-        };
+      if (panelLayout.h > 1) { // If it's not collapsed
+        originalLayouts.current[panelId] = { h: panelLayout.h, minH: panelLayout.minH };
+        newLayout[panelIndex] = { ...panelLayout, h: 1, minH: 1 }; // Collapse
+      } else { // If it is collapsed
+        const { h, minH } = originalLayouts.current[panelId] || { h: originalSpec?.h || 4, minH: originalSpec?.minH || 2 };
+        newLayout[panelIndex] = { ...panelLayout, h, minH }; // Expand
+      }
+      return newLayout;
     });
-  };
+
 const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
   const [turnActions, setTurnActions] = useState({ hasAttacked: false });
   const handlePrepareForCombat = async () => {
@@ -168,62 +144,93 @@ const activeParticipant = sessionData?.turn_order?.length > 0
         });
     }
   }, [activeParticipant]);
-
+const effectiveIsGM = isGM || isGmOverride;
   if (!sessionData) return <div>Loading Game Session...</div>;
 
   const onGridParticipants = sessionData.participants.filter(p => p.x_pos !== null && p.x_pos !== undefined);
   const offGridParticipants = sessionData.participants.filter(p => p.x_pos === null || p.x_pos === undefined);
 
   return (
+    <>
+    {isNpcManagerOpen && (
+        <NpcManager
+          gmId={currentUser.id}
+          sessionId={sessionData.id}
+          onClose={() => setIsNpcManagerOpen(false)}
+        />
+      )}
     <div className="game-room-dynamic">
       <GridLayout
         className="layout"
         layout={layout}
         cols={12}
-        rowHeight={60} // Increased row height for better vertical space
-        width={1920}
+        rowHeight={60}
+        width={window.innerWidth} // Make it responsive to window size
         onLayoutChange={handleLayoutChange}
         draggableHandle=".panel-header"
       >
-        {/* Panel 1: Your Character Avatars */}
-        <div key="avatars">
-          <Panel title="Party" isCollapsed={collapsedPanels.avatars} onToggleCollapse={() => togglePanelCollapse('avatars')}>
+        <div key="party">
+          <Panel title="Party" onToggleCollapse={() => togglePanelCollapse('party')}>
             <div className="participants-grid-horizontal">
-              {sessionData.participants.map((p) => (
-                <CharacterCard key={p.id} participant={p} />
-              ))}
+              {sessionData.participants.map((p) => (<CharacterCard key={p.id} participant={p} />))}
             </div>
           </Panel>
         </div>
         
-        {/* Panel 2: Your Game Log */}
         <div key="log">
-          <Panel title="Game Log" isCollapsed={collapsedPanels.log} onToggleCollapse={() => togglePanelCollapse('log')}>
+          <Panel title="Game Log" onToggleCollapse={() => togglePanelCollapse('log')}>
             <GameLog messages={sessionData.log || []} />
           </Panel>
         </div>
 
-        {/* Panel 3: Your Actions / Initiative */}
-        <div key="actions">
-          <Panel title={sessionData.current_mode === 'combat' ? 'Combat Actions' : 'Initiative'} isCollapsed={collapsedPanels.actions} onToggleCollapse={() => togglePanelCollapse('actions')}>
-            {sessionData.current_mode === 'combat' ? (
-              <ActionPanel abilities={activeCharacterAbilities} isMyTurn={isMyTurn} activeParticipant={activeParticipant} selectedAction={selectedAction} turnActions={turnActions} onSelectMove={() => setSelectedAction({ type: 'MOVE' })} onSelectAbility={(ability) => setSelectedAction({ type: 'TARGETING', ability })} onEndTurn={() => {}}/>
-            ) : (
-              <InitiativeTracker participants={sessionData.participants} turnOrder={sessionData.turn_order} currentTurnIndex={sessionData.current_turn_index} />
+        <div key="main">
+          <Panel title="The World" onToggleCollapse={() => { /* ... */ }}>
+            
+            {/* --- THIS IS THE FIX: CONTEXT-AWARE RENDERING --- */}
+            {sessionData.current_mode === 'exploration' && (
+                <div className="exploration-view">
+                  {effectiveIsGM && (
+                    <div className="gm-controls">
+                      <button onClick={handlePrepareForCombat}>Prepare for Combat</button>
+                      <button onClick={() => setIsNpcManagerOpen(true)}>Manage NPCs</button>
+                    </div>
+                  )}
+                  <div className="participants-grid">
+                    {sessionData.participants.map((p) => (<CharacterCard key={p.id} participant={p} />))}
+                  </div>
+                </div>
+              )}
+            {(sessionData.current_mode === 'staging' || sessionData.current_mode === 'combat') && (
+              <div className="staging-layout">
+                <CombatGrid participants={onGridParticipants} isGM={isGM} onTokenMove={() => {}} activeParticipantId={activeParticipant?.id} showMovementFor={selectedAction.type === 'MOVE' && isMyTurn ? activeParticipant : null} />
+                {sessionData.current_mode === 'staging' && isGM && offGridParticipants.length > 0 && (
+                  <div className="token-shelf">
+                    <h4>Available Tokens</h4>
+                    {offGridParticipants.map(p => (<div key={p.id} className="token-on-shelf" draggable onDragStart={(e) => e.dataTransfer.setData("participantId", p.id)}><Token participant={p} /></div>))}
+                  </div>
+                )}
+              </div>
             )}
+            {/* ------------------------------------------- */}
+            
           </Panel>
         </div>
 
-        {/* Panel 4: Your Combat Grid and GM Controls */}
-        <div key="grid">
-          <Panel title="The World" isCollapsed={collapsedPanels.grid} onToggleCollapse={() => togglePanelCollapse('grid')}>
-             {/* GM buttons will appear here based on game mode */}
-            <CombatGrid participants={onGridParticipants} isGM={isGM} showMovementFor={selectedAction.type === 'MOVE' && isMyTurn ? activeParticipant : null} />
+        <div key="context">
+          <Panel title="Context" onToggleCollapse={() => togglePanelCollapse('context')}>
+            {sessionData.current_mode === 'combat' ? (
+                <>
+                    <InitiativeTracker participants={sessionData.participants} turnOrder={sessionData.turn_order} currentTurnIndex={sessionData.current_turn_index} />
+                    <ActionPanel abilities={activeCharacterAbilities} isMyTurn={isMyTurn} activeParticipant={activeParticipant} selectedAction={selectedAction} turnActions={turnActions} onSelectMove={() => {}} onSelectAbility={() => {}} onEndTurn={handleEndTurn}/>
+                </>
+            ) : (
+                <div className="placeholder-text">Character details will appear here.</div>
+            )}
           </Panel>
         </div>
       </GridLayout>
     </div>
-  );
+  </>);
 }
-
+}
 export default GameRoom;
