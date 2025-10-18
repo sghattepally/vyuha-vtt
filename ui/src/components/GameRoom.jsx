@@ -9,6 +9,7 @@ import GameLog from './GameLog';
 import CharacterCard from './CharacterCard';
 import Token from './Token';
 import NpcManager from './NpcManager';
+import PartyPanel from './PartyPanel';
 
 const initialLayout = [
   { i: 'party', x: 0, y: 0, w: 7, h: 4, minW: 3, minH: 3 },
@@ -18,7 +19,7 @@ const initialLayout = [
 ];
 const COLLAPSED_HEIGHT = 1;
 
-function GameRoom({ sessionData, currentUser, isGM, isGmOverride }) {
+function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef }) {
   const [selectedAction, setSelectedAction] = useState({ type: 'none', ability: null });
   const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
   const [turnActions, setTurnActions] = useState({ hasAttacked: false });
@@ -172,12 +173,16 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride }) {
           draggableHandle=".panel-header"
           draggableCancel=".panel-collapse-button"
         >
-          <div key="party">
+          <div key="party" className="allow-overflow">
             <Panel title="Party" onCollapse={() => togglePanelCollapse('party')}
               isCollapsed={layout.find(p => p.i === 'party')?.h === COLLAPSED_HEIGHT}>
-              <div className="participants-grid-horizontal">
-                {sessionData.participants.map((p) => (<CharacterCard key={p.id} participant={p} />))}
-              </div>
+              <PartyPanel
+              participants={sessionData.participants}
+              currentUser={currentUser}
+              isGM={effectiveIsGM}
+              dragPreviewRef={dragPreviewRef}
+              sessionMode={sessionData.current_mode}
+            />
             </Panel>
           </div>
 
@@ -274,21 +279,6 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride }) {
                 </>
               ) : (
                 <div className="placeholder-text">Character details will appear here.</div>
-              )}
-              {sessionData.current_mode === 'staging' && effectiveIsGM && offGridParticipants.length > 0 && (
-                <div className="token-shelf">
-                  <h4>Available Tokens</h4>
-                  {offGridParticipants.map(p => (
-                    <div
-                      key={p.id}
-                      className="token-on-shelf"
-                      draggable
-                      onDragStart={(e) => e.dataTransfer.setData("participantId", String(p.id))} // Ensure ID is a string
-                    >
-                      <Token participant={p} />
-                    </div>
-                  ))}
-                </div>
               )}
             </Panel>
           </div>

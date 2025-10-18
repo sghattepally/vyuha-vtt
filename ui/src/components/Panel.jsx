@@ -1,6 +1,6 @@
 import React from 'react';
 
-function Panel({ title, children, onCollapse, isCollapsed }) {
+function Panel({ title, children, onCollapse, isCollapsed, contentClassName }) {
   return (
     <div className="panel">
       <div className="panel-header">
@@ -20,7 +20,7 @@ function Panel({ title, children, onCollapse, isCollapsed }) {
         space in the DOM when the panel is collapsed.
       */}
       {!isCollapsed && (
-        <div className="panel-content">
+        <div className={`panel-content ${contentClassName}`}>
           {children}
         </div>
       )}

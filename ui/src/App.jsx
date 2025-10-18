@@ -1,10 +1,11 @@
 // ui/src/App.jsx (Definitive Fix)
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import GameRoom from './components/GameRoom';
 import HomePage from './components/HomePage';
 import Lobby from './components/Lobby';
+import Token from './components/Token';
 import './App.css';
 
 function App() {
@@ -13,6 +14,7 @@ function App() {
   const [playerData, setPlayerData] = useState(null);
   const [isGmOverride, setIsGmOverride] = useState(false);
   const [error, setError] = useState('');
+  const dragPreviewRef = useRef(null);
 
   // Effect #1: Load initial state from localStorage on startup.
   useEffect(() => {
@@ -101,7 +103,6 @@ function App() {
     const isGM = playerData.id === sessionData.gm_id;
     return (
       <>
-        {/* --- ADD THE TOGGLE BUTTON --- */}
         <div className="gm-toggle">
           <label>
             <input 
@@ -112,10 +113,16 @@ function App() {
             GM View
           </label>
         </div>
+        <div ref={dragPreviewRef} style={{ position: 'fixed', top: '-100px', left: '-100px' }}>
+            <div style={{width: '50px', height: '50px'}}>
+                <Token participant={{ character: { name: ' ' }, current_prana: 1, max_prana: 1 }} />
+            </div>
+        </div>
         <GameRoom 
           sessionData={sessionData} 
           currentUser={playerData} 
           isGM={isGM}
+          dragPreviewRef={dragPreviewRef}
           isGmOverride={isGmOverride} // Pass the override state down
         />
       </>
