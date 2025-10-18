@@ -156,6 +156,9 @@ class ActionResponse(pydantic.BaseModel):
 class AddNpcsRequest(pydantic.BaseModel):
     character_ids: List[int] # Expects a list of IDs
 
+class UpdateNpcsRequest(pydantic.BaseModel):
+    npc_ids: List[int]
+
 # ==================================
 # 4. The FastAPI App Instance & CORS
 # ==================================
@@ -569,16 +572,13 @@ async def perform_action(session_id: int, action: GameAction, background_tasks: 
     if action.action_type == "MOVE":
         if actor.x_pos is None: raise HTTPException(status_code=400, detail="Actor not on grid")
         distance = abs(actor.x_pos - action.new_x) + abs(actor.y_pos - action.new_y)
-        
-        # --- THE FIX for movement ---
-        # It now correctly checks against remaining_speed
         if distance > actor.remaining_speed:
             raise HTTPException(status_code=400, detail=f"Move exceeds remaining speed of {actor.remaining_speed}")
         
         actor.x_pos = action.new_x
         actor.y_pos = action.new_y
         actor.remaining_speed -= distance # Subtract the distance moved
-        # ----------------------------
+        
 
         message = f"{actor.character.name} moves to ({action.new_x}, {action.new_y}). Remaining speed: {actor.remaining_speed}."
 
@@ -587,47 +587,35 @@ async def perform_action(session_id: int, action: GameAction, background_tasks: 
         ability = db.query(models.Ability).filter(models.Ability.id == action.ability_id).first()
         if not target or not ability: raise HTTPException(status_code=404, detail="Target or Ability not found")
         if actor.x_pos is None or target.x_pos is None: raise HTTPException(status_code=400, detail="Characters not on grid")
-        
         distance = max(abs(actor.x_pos - target.x_pos), abs(actor.y_pos - target.y_pos))
         if distance > ability.range:
-            raise HTTPException(status_code=400, detail=f"Target out of range! (Range: {ability.range}, Dist: {distance})")
-        
-        to_hit_mod = game_rules.get_attribute_modifier(getattr(actor.character, ability.to_hit_attribute))
-        attack_roll = random.randint(1, 20)
-        total_attack = attack_roll + to_hit_mod
-        
-        evasion_dc = 10 + game_rules.get_attribute_modifier(target.character.dakshata)
-        
-        if total_attack >= evasion_dc:
-            damage_mod = 0
-            if ability.damage_attribute and ability.damage_attribute != "none":
-                damage_mod = game_rules.get_attribute_modifier(getattr(actor.character, ability.damage_attribute))
-            
-            num, dice = map(int, ability.damage_dice.split('d'))
-            damage_roll = sum(random.randint(1, dice) for _ in range(num))
-            total_damage = max(0, damage_roll + damage_mod)
-            
-            target.current_prana = max(0, target.current_prana - total_damage)
-            
-            # --- NEW, DETAILED MESSAGE ---
-            message = (
-                f"{actor.character.name}'s {ability.name} hits {target.character.name}! "
-                f"(Roll: {attack_roll} + Mod: {to_hit_mod} = {total_attack} vs DC {evasion_dc}). "
-                f"Deals {total_damage} damage. {target.character.name} has {target.current_prana} Prāṇa remaining."
-            )
-            # ---------------------------
-
-            if target.current_prana == 0:
-                target.status = "downed"
-                message += f" {target.character.name} is downed!"
-
+            # Instead of raising an error, we just set the message.
+            message = f"{actor.character.name}'s {ability.name} fails: {target.character.name} is out of range! (Range: {ability.range}, Distance: {distance})"
         else:
-            # --- NEW, DETAILED MESSAGE ---
-            message = (
-                f"{actor.character.name}'s {ability.name} misses {target.character.name}! "
-                f"(Roll: {attack_roll} + Mod: {to_hit_mod} = {total_attack} vs DC {evasion_dc})."
-            )
-            # ---------------------------
+            # The rest of the attack logic only runs if the target is in range.
+            to_hit_mod = game_rules.get_attribute_modifier(getattr(actor.character, ability.to_hit_attribute))
+            attack_roll = random.randint(1, 20)
+            total_attack = attack_roll + to_hit_mod
+            evasion_dc = 10 + game_rules.get_attribute_modifier(target.character.dakshata)
+            
+            if total_attack >= evasion_dc:
+                damage_mod = 0
+                if ability.damage_attribute:
+                    damage_mod = game_rules.get_attribute_modifier(getattr(actor.character, ability.damage_attribute))
+                
+                num, dice = map(int, ability.damage_dice.split('d'))
+                damage_roll = sum(random.randint(1, dice) for _ in range(num))
+                total_damage = max(0, damage_roll + damage_mod)
+                target.current_prana = max(0, target.current_prana - total_damage)
+                message = (f"{actor.character.name}'s {ability.name} hits {target.character.name}! "
+                           f"(Roll: {attack_roll} + Mod: {to_hit_mod} = {total_attack} vs DC {evasion_dc}). "
+                           f"Deals {total_damage} damage. {target.character.name} has {target.current_prana} Prāṇa remaining.")
+                if target.current_prana == 0:
+                    target.status = "downed"
+                    message += f" {target.character.name} is downed!"
+            else:
+                message = (f"{actor.character.name}'s {ability.name} misses {target.character.name}! "
+                           f"(Roll: {attack_roll} + Mod: {to_hit_mod} = {total_attack} vs DC {evasion_dc}).")
     if message:
         # Prepend the new message to the session's log.
         # We check `session.log` exists to avoid errors on older sessions in your DB.
@@ -697,7 +685,7 @@ async def add_npcs_to_session(session_id: int, request: AddNpcsRequest, backgrou
         new_npc = models.SessionCharacter(
             session_id=session.id,
             character_id=char.id,
-            player_id=None,
+            player_id=session.gm_id,
             current_prana=char.max_prana,
             current_tapas=char.max_tapas,
             current_maya=char.max_maya,
@@ -710,4 +698,48 @@ async def add_npcs_to_session(session_id: int, request: AddNpcsRequest, backgrou
     db.commit()
 
     background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    return session
+
+@app.post("/sessions/{session_id}/update_npcs/", response_model=GameSessionSchema)
+async def update_session_npcs(session_id: int, request: UpdateNpcsRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Get the character IDs of current NPCs in the session
+    current_npc_participants = db.query(models.SessionCharacter).filter(
+        models.SessionCharacter.session_id == session_id,
+        models.SessionCharacter.player_id == None
+    ).all()
+    current_npc_ids = {p.character_id for p in current_npc_participants}
+    
+    requested_npc_ids = set(request.npc_ids)
+
+    # Determine which NPCs to add and remove
+    ids_to_add = requested_npc_ids - current_npc_ids
+    ids_to_remove = current_npc_ids - requested_npc_ids
+
+    # Remove NPCs who are no longer selected
+    if ids_to_remove:
+        participants_to_remove = [p for p in current_npc_participants if p.character_id in ids_to_remove]
+        for p in participants_to_remove:
+            db.delete(p)
+
+    # Add new NPCs
+    if ids_to_add:
+        character_templates = db.query(models.Character).filter(models.Character.id.in_(ids_to_add)).all()
+        for char in character_templates:
+            # Security check: Ensure GM owns the template
+            if char.owner_id != session.gm_id:
+                raise HTTPException(status_code=403, detail=f"GM does not own character template: {char.name}")
+            new_npc = models.SessionCharacter(
+                session_id=session.id, 
+                character_id=char.id, 
+                player_id=session.gm_id,
+                current_prana=char.max_prana, current_tapas=char.max_tapas, current_maya=char.max_maya
+            )
+            db.add(new_npc)
+
+    db.commit()
+    background_tasks.add_task(manager.broadcast_session_state, session.id, db)
     return session

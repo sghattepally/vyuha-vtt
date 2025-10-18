@@ -50,8 +50,9 @@ function CombatGrid({ participants, isGM, onTokenMove, onGridClick, onTokenClick
               left: `${p.x_pos * GRID_CELL_SIZE}px`,
               top: `${p.y_pos * GRID_CELL_SIZE}px`,
             }}
-            draggable={isGM && onTokenMove} // Only draggable in staging
-            onDragStart={(e) => e.dataTransfer.setData("participantId", p.id)}
+            draggable={!!(isGM && onTokenMove)} 
+            onDragStart={(e) => e.dataTransfer.setData("participantId", String(p.id))}
+            
           >
             <Token 
               participant={p} 

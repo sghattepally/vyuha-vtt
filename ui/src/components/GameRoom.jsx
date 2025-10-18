@@ -8,64 +8,66 @@ import ActionPanel from './ActionPanel';
 import GameLog from './GameLog';
 import CharacterCard from './CharacterCard';
 import Token from './Token';
+import NpcManager from './NpcManager';
 
 const initialLayout = [
-    { i: 'party', x: 0, y: 0, w: 12, h: 3, minW: 3, minH: 3 },
-    { i: 'log', x: 9, y: 3, w: 3, h: 9, minW: 2, minH: 4 },
-    { i: 'main', x: 3, y: 3, w: 6, h: 9, minW: 4, minH: 5 },
-    { i: 'context', x: 0, y: 3, w: 3, h: 9, minW: 2, minH: 5 },
-  ];
+  { i: 'party', x: 0, y: 0, w: 7, h: 4, minW: 3, minH: 3 },
+  { i: 'log', x: 7, y: 0, w: 5, h: 4, minW: 2, minH: 3 },
+  { i: 'main', x: 3, y: 4, w: 9, h: 9, minW: 4, minH: 5 },
+  { i: 'context', x: 0, y: 4, w: 3, h: 9, minW: 2, minH: 5 },
+];
 const COLLAPSED_HEIGHT = 1;
 
-function GameRoom({ sessionData, currentUser, isGM }) {
+function GameRoom({ sessionData, currentUser, isGM, isGmOverride }) {
   const [selectedAction, setSelectedAction] = useState({ type: 'none', ability: null });
   const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
   const [turnActions, setTurnActions] = useState({ hasAttacked: false });
   const [isNpcManagerOpen, setIsNpcManagerOpen] = useState(false);
   const [layout, setLayout] = useState(initialLayout);
   const originalLayouts = useRef({});
+  const effectiveIsGM = isGM && isGmOverride;
   const handleLayoutChange = (newLayout) => {
     setLayout(newLayout);
   };
 
 
-const togglePanelCollapse = (panelKey) => {
-  setLayout(prevLayout =>
-    prevLayout.map(panel => {
-      if (panel.i === panelKey) {
-        const isCollapsed = panel.h === COLLAPSED_HEIGHT;
+  const togglePanelCollapse = (panelKey) => {
+    setLayout(prevLayout =>
+      prevLayout.map(panel => {
+        if (panel.i === panelKey) {
+          const isCollapsed = panel.h === COLLAPSED_HEIGHT;
 
-        if (isCollapsed) {
-          // If it IS collapsed, restore it using the saved layout.
-          const original = originalLayouts.current[panelKey];
-          return {
-            ...panel,
-            h: original ? original.h : 3, // Restore height
-            minH: original ? original.minH : 3, // Restore minHeight
-            maxH: undefined, // Allow resizing again
-          };
-        } else {
-          // *** THIS IS THE FIX ***
-          // If it is NOT collapsed, save its current state BEFORE collapsing.
-          originalLayouts.current[panelKey] = { ...panel };
+          if (isCollapsed) {
+            // If it IS collapsed, restore it using the saved layout.
+            const original = originalLayouts.current[panelKey];
+            return {
+              ...panel,
+              h: original ? original.h : 3, // Restore height
+              minH: original ? original.minH : 3, // Restore minHeight
+              maxH: undefined, // Allow resizing again
+            };
+          } else {
+            // *** THIS IS THE FIX ***
+            // If it is NOT collapsed, save its current state BEFORE collapsing.
+            originalLayouts.current[panelKey] = { ...panel };
 
-          return {
-            ...panel,
-            h: COLLAPSED_HEIGHT,
-            minH: COLLAPSED_HEIGHT,
-            maxH: COLLAPSED_HEIGHT, // Prevent resizing while collapsed
-          };
+            return {
+              ...panel,
+              h: COLLAPSED_HEIGHT,
+              minH: COLLAPSED_HEIGHT,
+              maxH: COLLAPSED_HEIGHT, // Prevent resizing while collapsed
+            };
+          }
         }
-      }
-      return panel;
-    })
-  );
-};
+        return panel;
+      })
+    );
+  };
 
   const handlePrepareForCombat = async () => {
-    if (!isGM) return;
+    if (!effectiveIsGM) return;
     try {
-      
+
       await axios.patch(`http://localhost:8000/sessions/${sessionData.id}/`, {
         current_mode: 'staging'
       });
@@ -75,7 +77,7 @@ const togglePanelCollapse = (panelKey) => {
   };
 
   const handleTokenMove = async (participantId, x, y) => {
-    if (!isGM) return;
+    if (!effectiveIsGM) return;
     try {
       await axios.patch(`http://localhost:8000/sessions/${sessionData.id}/`, {
         participant_positions: [{ participant_id: participantId, x_pos: x, y_pos: y }]
@@ -84,8 +86,8 @@ const togglePanelCollapse = (panelKey) => {
       console.error("Failed to move token", err);
     }
   };
-const handleBeginCombat = async () => {
-    if (!isGM) return;
+  const handleBeginCombat = async () => {
+    if (!effectiveIsGM) return;
     try {
       await axios.post(`http://localhost:8000/sessions/${sessionData.id}/begin_combat`);
     } catch (err) {
@@ -95,35 +97,29 @@ const handleBeginCombat = async () => {
   const handlePerformAction = async (actionPayload) => {
     try {
       await axios.post(`http://localhost:8000/sessions/${sessionData.id}/action`, actionPayload);
-      if (actionPayload.action_type === 'ATTACK') {
-        setTurnActions({ hasAttacked: true });
-      }
+      if (actionPayload.action_type === 'ATTACK') setTurnActions({ hasAttacked: true });
       setSelectedAction({ type: 'none', ability: null });
-    } catch (err) {
-      console.error("Action failed:", err.response?.data?.detail || err);
-    }
-  };
-  const handleEndTurn = async () => {
-    try {
-        await axios.post(`http://localhost:8000/sessions/${sessionData.id}/next_turn`);
-        setTurnActions({ hasAttacked: false });
-        setSelectedAction({ type: 'none', ability: null });
-    } catch (err) {
-        console.error("Failed to end turn:", err);
-    }
+    } catch (err) { console.error("Action failed:", err.response?.data?.detail || err); }
   };
 
+  const handleEndTurn = async () => {
+    try {
+      await axios.post(`http://localhost:8000/sessions/${sessionData.id}/next_turn`);
+      setTurnActions({ hasAttacked: false });
+      setSelectedAction({ type: 'none', ability: null });
+    } catch (err) { console.error("Failed to end turn:", err); }
+  };
   const handleEndCombat = async () => {
-    if (!isGM) return;
+    if (!effectiveIsGM) return;
     try {
       await axios.post(`http://localhost:8000/sessions/${sessionData.id}/end_combat`);
     } catch (err) { console.error("Failed to end combat:", err); }
   };
 
-const activeParticipant = sessionData?.turn_order?.length > 0
+  const activeParticipant = sessionData?.turn_order?.length > 0
     ? sessionData.participants.find(p => p.id === sessionData.turn_order[sessionData.current_turn_index])
     : null;
-  const isMyTurn = activeParticipant && (activeParticipant.player_id === currentUser.id || isGM);
+  const isMyTurn = activeParticipant && (activeParticipant.player_id === currentUser.id || effectiveIsGM);
 
   const handleGridClick = (x, y) => {
     if (selectedAction.type === 'MOVE' && activeParticipant && isMyTurn) {
@@ -149,7 +145,7 @@ const activeParticipant = sessionData?.turn_order?.length > 0
         });
     }
   }, [activeParticipant]);
-const effectiveIsGM = isGM || isGmOverride;
+
   if (!sessionData) return <div>Loading Game Session...</div>;
 
   const onGridParticipants = sessionData.participants.filter(p => p.x_pos !== null && p.x_pos !== undefined);
@@ -157,89 +153,148 @@ const effectiveIsGM = isGM || isGmOverride;
 
   return (
     <>
-    {isNpcManagerOpen && (
+      {isNpcManagerOpen && (
         <NpcManager
           gmId={currentUser.id}
           sessionId={sessionData.id}
+          sessionParticipants={sessionData.participants}
           onClose={() => setIsNpcManagerOpen(false)}
         />
       )}
-    <div className="game-room-dynamic">
-      <GridLayout
-        className="layout"
-        layout={layout}
-        cols={12}
-        rowHeight={60}
-        width={window.innerWidth} // Make it responsive to window size
-        onLayoutChange={handleLayoutChange}
-        draggableHandle=".panel-header"
-        draggableCancel=".panel-collapse-button"
-      >
-        <div key="party">
-          <Panel title="Party" onCollapse={() => togglePanelCollapse('party')}
-  isCollapsed={layout.find(p => p.i === 'party')?.h === COLLAPSED_HEIGHT}>
-            <div className="participants-grid-horizontal">
-              {sessionData.participants.map((p) => (<CharacterCard key={p.id} participant={p} />))}
-            </div>
-          </Panel>
-        </div>
-        
-        <div key="log">
-          <Panel title="Game Log" onCollapse={() => togglePanelCollapse('log')}
-  isCollapsed={layout.find(p => p.i === 'log')?.h === COLLAPSED_HEIGHT}>
-            <GameLog messages={sessionData.log || []} />
-          </Panel>
-        </div>
+      <div className="game-room-dynamic">
+        <GridLayout
+          className="layout"
+          layout={layout}
+          cols={12}
+          rowHeight={60}
+          width={window.innerWidth} // Make it responsive to window size
+          onLayoutChange={handleLayoutChange}
+          draggableHandle=".panel-header"
+          draggableCancel=".panel-collapse-button"
+        >
+          <div key="party">
+            <Panel title="Party" onCollapse={() => togglePanelCollapse('party')}
+              isCollapsed={layout.find(p => p.i === 'party')?.h === COLLAPSED_HEIGHT}>
+              <div className="participants-grid-horizontal">
+                {sessionData.participants.map((p) => (<CharacterCard key={p.id} participant={p} />))}
+              </div>
+            </Panel>
+          </div>
 
-        <div key="main">
-          <Panel title="The World" onCollapse={() => togglePanelCollapse('main')}
-  isCollapsed={layout.find(p => p.i === 'main')?.h === COLLAPSED_HEIGHT}>
-            
-            
-            {sessionData.current_mode === 'exploration' && (
+          <div key="log">
+            <Panel title="Game Log" onCollapse={() => togglePanelCollapse('log')}
+              isCollapsed={layout.find(p => p.i === 'log')?.h === COLLAPSED_HEIGHT}>
+              <GameLog messages={sessionData.log || []} />
+            </Panel>
+          </div>
+
+          <div key="main">
+            <Panel title="The World" onCollapse={() => togglePanelCollapse('main')}
+              isCollapsed={layout.find(p => p.i === 'main')?.h === COLLAPSED_HEIGHT}>
+
+
+              {sessionData.current_mode === 'exploration' && (
                 <div className="exploration-view">
-                  {effectiveIsGM && (
-                    <div className="gm-controls">
-                      <button onClick={handlePrepareForCombat}>Prepare for Combat</button>
-                      <button onClick={() => setIsNpcManagerOpen(true)}>Manage NPCs</button>
-                    </div>
-                  )}
-                  <div className="participants-grid">
-                    {sessionData.participants.map((p) => (<CharacterCard key={p.id} participant={p} />))}
+                </div>
+              )}
+              {(sessionData.current_mode === 'staging' || sessionData.current_mode === 'combat') && (
+                <div className="staging-layout">
+                  <div className="grid-container">
+                    <CombatGrid
+                      participants={onGridParticipants}
+                      isGM={isGM}
+                      // --- RECONNECT EXISTING HANDLERS ---
+                      onTokenMove={handleTokenMove}
+                      onGridClick={handleGridClick}
+                      onTokenClick={handleTokenClick}
+
+                      activeParticipantId={activeParticipant?.id}
+                      showMovementFor={selectedAction.type === 'MOVE' && isMyTurn ? activeParticipant : null}
+
+                      // --- ADD DROP FUNCTIONALITY ---
+                      onDragOver={(e) => e.preventDefault()} // This is required to allow a drop
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const participantId = e.dataTransfer.getData("participantId");
+
+                        // Calculate grid coordinates from the drop position
+                        const gridRect = e.currentTarget.getBoundingClientRect();
+                        const x = Math.floor((e.clientX - gridRect.left) / 50); // Assumes 50px grid cells
+                        const y = Math.floor((e.clientY - gridRect.top) / 50);
+
+                        // Call the existing function to update the backend
+                        if (participantId) {
+                          handleTokenMove(participantId, x, y);
+                        }
+                      }}
+                    />
                   </div>
                 </div>
               )}
-            {(sessionData.current_mode === 'staging' || sessionData.current_mode === 'combat') && (
-              <div className="staging-layout">
-                <CombatGrid participants={onGridParticipants} isGM={isGM} onTokenMove={() => {}} activeParticipantId={activeParticipant?.id} showMovementFor={selectedAction.type === 'MOVE' && isMyTurn ? activeParticipant : null} />
-                {sessionData.current_mode === 'staging' && isGM && offGridParticipants.length > 0 && (
-                  <div className="token-shelf">
-                    <h4>Available Tokens</h4>
-                    {offGridParticipants.map(p => (<div key={p.id} className="token-on-shelf" draggable onDragStart={(e) => e.dataTransfer.setData("participantId", p.id)}><Token participant={p} /></div>))}
-                  </div>
-                )}
-              </div>
-            )}
-            
-          </Panel>
-        </div>
 
-        <div key="context">
-          <Panel title="Context" onCollapse={() => togglePanelCollapse('context')}
-  isCollapsed={layout.find(p => p.i === 'context')?.h === COLLAPSED_HEIGHT}>
-            {sessionData.current_mode === 'combat' ? (
+            </Panel>
+          </div>
+
+          <div key="context">
+            <Panel title="Context" onCollapse={() => togglePanelCollapse('context')}
+              isCollapsed={layout.find(p => p.i === 'context')?.h === COLLAPSED_HEIGHT}>
+              {effectiveIsGM && (
+                <div className="gm-context-controls">
+                  {/* These buttons only show during EXPLORATION */}
+                  {sessionData.current_mode === 'exploration' && (
+                    <>
+                      <button onClick={handlePrepareForCombat}>Prepare for Combat</button>
+                      <button onClick={() => setIsNpcManagerOpen(true)}>Manage NPCs</button>
+                    </>
+                  )}
+
+                  {/* This button only shows during STAGING */}
+                  {sessionData.current_mode === 'staging' && (
+                    <button onClick={handleBeginCombat}>Begin Combat</button>
+                  )}
+                  {sessionData.current_mode === 'combat' && (
+      <button className = "gm-end-combat-btn" onClick={handleEndCombat}>
+        End Combat
+      </button>
+    )}
+                </div>
+              )}
+              {sessionData.current_mode === 'combat' ? (
                 <>
-                    <InitiativeTracker participants={sessionData.participants} turnOrder={sessionData.turn_order} currentTurnIndex={sessionData.current_turn_index} />
-                    <ActionPanel abilities={activeCharacterAbilities} isMyTurn={isMyTurn} activeParticipant={activeParticipant} selectedAction={selectedAction} turnActions={turnActions} onSelectMove={() => {}} onSelectAbility={() => {}} onEndTurn={handleEndTurn}/>
+                  <InitiativeTracker participants={sessionData.participants} turnOrder={sessionData.turn_order} currentTurnIndex={sessionData.current_turn_index} />
+                  <ActionPanel 
+                  abilities={activeCharacterAbilities} 
+                  isMyTurn={isMyTurn} 
+                  activeParticipant={activeParticipant} 
+                  selectedAction={selectedAction} 
+                  turnActions={turnActions} 
+                  onSelectMove={() => setSelectedAction({ type: 'MOVE' })}
+                  onSelectAbility={(ability) => setSelectedAction({ type: 'TARGETING', ability })} 
+                    onEndTurn={handleEndTurn} />
                 </>
-            ) : (
+              ) : (
                 <div className="placeholder-text">Character details will appear here.</div>
-            )}
-          </Panel>
-        </div>
-      </GridLayout>
-    </div>
-  </>);
+              )}
+              {sessionData.current_mode === 'staging' && effectiveIsGM && offGridParticipants.length > 0 && (
+                <div className="token-shelf">
+                  <h4>Available Tokens</h4>
+                  {offGridParticipants.map(p => (
+                    <div
+                      key={p.id}
+                      className="token-on-shelf"
+                      draggable
+                      onDragStart={(e) => e.dataTransfer.setData("participantId", String(p.id))} // Ensure ID is a string
+                    >
+                      <Token participant={p} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+          </div>
+        </GridLayout>
+      </div>
+    </>);
 }
 
 export default GameRoom;

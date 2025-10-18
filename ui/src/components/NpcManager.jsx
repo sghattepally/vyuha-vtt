@@ -1,74 +1,97 @@
-// ui/src/components/NpcManager.jsx (Redesigned)
-
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-function NpcManager({ gmId, sessionId, onClose }) {
-  const [myNpcs, setMyNpcs] = useState([]);
-  const [selectedNpcIds, setSelectedNpcIds] = useState(new Set());
-  const [isLoading, setIsLoading] = useState(false);
+// The component is now robust enough to handle a missing sessionParticipants prop.
+function NpcManager({ sessionId, sessionParticipants, gmId, onClose }) {
+  const [allGmCharacters, setAllGmCharacters] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const [selectedNpcIds, setSelectedNpcIds] = useState(() => {
+    // --- THIS IS THE FIX ---
+    // We now check if sessionParticipants is a valid array before trying to use it.
+    // If it's not, we default to an empty array, preventing the crash.
+    const initialParticipants = Array.isArray(sessionParticipants) ? sessionParticipants : [];
+    
+    const initialIds = initialParticipants
+      .filter(p => p.player_id === null || p.player_id === gmId) // Caters to our new backend logic
+      .map(p => p.character.id);
+    return new Set(initialIds);
+  });
 
   useEffect(() => {
-    axios.get(`http://localhost:8000/users/${gmId}/characters`)
-      .then(res => setMyNpcs(res.data))
-      .catch(err => console.error("Failed to fetch GM characters", err));
+    if (!gmId) {
+      setError("GM ID is missing. Cannot load characters.");
+      setIsLoading(false);
+      return;
+    }
+    axios.get(`http://localhost:8000/users/${gmId}/characters/`)
+      .then(res => {
+        setAllGmCharacters(res.data);
+        setIsLoading(false);
+      })
+      .catch(err => {
+        console.error("Failed to fetch GM characters:", err);
+        setError("Could not load character templates.");
+        setIsLoading(false);
+      });
   }, [gmId]);
 
-  const handleToggleNpc = (npcId) => {
-    setSelectedNpcIds(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(npcId)) {
-        newSet.delete(npcId);
+  const handleCheckboxChange = (characterId) => {
+    setSelectedNpcIds(prevIds => {
+      const newIds = new Set(prevIds);
+      if (newIds.has(characterId)) {
+        newIds.delete(characterId);
       } else {
-        newSet.add(npcId);
+        newIds.add(characterId);
       }
-      return newSet;
+      return newIds;
     });
   };
 
-  const handleAddSelectedNpcs = async () => {
-    if (selectedNpcIds.size === 0) return;
-    setIsLoading(true);
-    try {
-      await axios.post(`http://localhost:8000/sessions/${sessionId}/add_npcs`, {
-        character_ids: Array.from(selectedNpcIds)
-      });
-      onClose(); // Close the modal on success
-    } catch (err) {
-      console.error("Failed to add NPCs", err);
-      // Optionally show an error message to the user here
-    } finally {
-      setIsLoading(false);
-    }
+  const handleUpdateSession = () => {
+    const npcIdList = Array.from(selectedNpcIds);
+    axios.post(`http://localhost:8000/sessions/${sessionId}/update_npcs/`, {
+      npc_ids: npcIdList
+    })
+    .then(() => {
+      onClose();
+    })
+    .catch(err => {
+      console.error("Failed to update session NPCs:", err);
+      setError("An error occurred while updating the session.");
+    });
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-content" onClick={e => e.stopPropagation()}>
-        <h2>Manage NPCs</h2>
+    <div className="modal-backdrop">
+      <div className="modal-content">
+        <h2>Manage NPCs in Session</h2>
         <div className="npc-list">
-          {myNpcs.length > 0 ? myNpcs.map(npc => (
-            <div key={npc.id} className="npc-list-item">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={selectedNpcIds.has(npc.id)}
-                  onChange={() => handleToggleNpc(npc.id)}
-                />
-                {npc.name} - Lvl {npc.level} {npc.character_class}
-              </label>
-            </div>
-          )) : <p>You have not created any NPC templates.</p>}
+          {isLoading ? (
+            <p>Loading characters...</p>
+          ) : error ? (
+            <p className="error-message">{error}</p>
+          ) : allGmCharacters.length > 0 ? (
+            allGmCharacters.map(char => (
+              <div key={char.id} className="npc-list-item">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={selectedNpcIds.has(char.id)}
+                    onChange={() => handleCheckboxChange(char.id)}
+                  />
+                  {char.name} - ({char.character_class})
+                </label>
+              </div>
+            ))
+          ) : (
+            <p>No character templates found. Create some first!</p>
+          )}
         </div>
         <div className="modal-actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button 
-            type="button" 
-            onClick={handleAddSelectedNpcs}
-            disabled={isLoading || selectedNpcIds.size === 0}
-          >
-            {isLoading ? 'Adding...' : `Add ${selectedNpcIds.size} to Session`}
-          </button>
+          <button onClick={handleUpdateSession} disabled={isLoading}>Update Session</button>
+          <button onClick={onClose} className="button-secondary">Cancel</button>
         </div>
       </div>
     </div>
