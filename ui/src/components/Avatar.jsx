@@ -20,7 +20,7 @@ const ResourceBar = ({ current, max, color }) => {
 const Tooltip = ({ participant, isSelf, isGM, position }) => {
   if (!position) return null;
   const { character, status, current_prana, current_tapas, current_maya } = participant;
-  const style = { position: 'fixed', top: position.top, left: position.left, transform: 'translateX(-50%)', zIndex: 1000 };
+  const style = { position: 'fixed', top: position.top, left: position.left, transform: position.transform, zIndex: 1000 };
 
   return ReactDOM.createPortal(
     <div className="avatar-tooltip" style={style}>
@@ -55,7 +55,30 @@ function Avatar({ participant, isSelf, isGM, isDraggable, onAvatarDragStart, dra
   const avatarRef = useRef(null);
   const [tooltipPosition, setTooltipPosition] = useState(null);
 
-  const handleMouseEnter = () => { if (avatarRef.current) { const rect = avatarRef.current.getBoundingClientRect(); setTooltipPosition({ left: rect.left + rect.width / 2, top: rect.bottom + 10 }); } };
+  const handleMouseEnter = () => { if (avatarRef.current) { 
+    const rect = avatarRef.current.getBoundingClientRect(); 
+    const tooltipWidth = 240;
+    let left = rect.left + rect.width / 2;
+      let transform = 'translateX(-50%)'; // Default: center the tooltip
+
+      // Check if it's going off the right edge of the screen
+      if (left + (tooltipWidth / 2) > window.innerWidth) {
+        left = rect.right;
+        transform = 'translateX(-100%)'; // Align right edge of tooltip with right edge of avatar
+      }
+      
+      // Check if it's going off the left edge of the screen
+      if (left - (tooltipWidth / 2) < 0) {
+        left = rect.left;
+        transform = 'translateX(0%)'; // Align left edge of tooltip with left edge of avatar
+      }
+
+      setTooltipPosition({
+        left: left,
+        top: rect.bottom + 10,
+        transform: transform,
+      });
+     } };
   const handleMouseLeave = () => setTooltipPosition(null);
 
   const handleDragStart = (e) => {
@@ -66,7 +89,7 @@ function Avatar({ participant, isSelf, isGM, isDraggable, onAvatarDragStart, dra
   };
 
   return (
-    <div 
+    <div
       className={`avatar-container ${isSelf ? 'is-self' : ''}`}
       ref={avatarRef}
       onMouseEnter={handleMouseEnter}
