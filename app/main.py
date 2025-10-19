@@ -5,7 +5,7 @@
 # ==================================
 import os
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from . import models, game_rules
 from .models import engine, SessionLocal
 import pydantic
@@ -14,6 +14,7 @@ from typing import List
 from fastapi.middleware.cors import CORSMiddleware
 import json, string
 import asyncio
+import datetime
 
 
 # ==================================
@@ -115,7 +116,18 @@ class GameSessionSchema(pydantic.BaseModel):
     participants: List[SessionCharacterSchema] = []
     turn_order: List[int] = []
     current_turn_index: int = 0
-    log: List[str] = []
+
+    class Config:
+        from_attributes = True
+
+class GameLogEntrySchema(pydantic.BaseModel):
+    id: int
+    timestamp: datetime.datetime
+    event_type: str
+    actor_id: int | None = None
+    target_id: int | None = None
+    details: dict | None = None
+    
     class Config:
         from_attributes = True
 
@@ -183,17 +195,19 @@ class ConnectionManager:
             # Run them concurrently
             await asyncio.gather(*tasks)
 
-    # This is a new helper function we've added.
     async def broadcast_session_state(self, session_id: int, db: Session):
         """Fetches the session from DB, validates it, and broadcasts it."""
         print(f"Attempting to broadcast state for session {session_id}")
-        session_db = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+        session_db = db.query(models.GameSession).options(joinedload(models.GameSession.participants).joinedload(models.SessionCharacter.character)).filter(models.GameSession.id == session_id).first()
         if session_db:
             # Convert the SQLAlchemy object to a Pydantic schema
-            session_schema = GameSessionSchema.from_orm(session_db)
-            # Convert the schema to a JSON string
-            json_payload = session_schema.model_dump_json()
-            # Broadcast the JSON string
+            session_schema = GameSessionSchema.model_validate(session_db)
+            
+            typed_message = {
+                "type": "session_update",
+                "data": session_schema.model_dump()
+            }
+            json_payload = json.dumps(typed_message, default=str)
             await self.broadcast_json(session_id, json_payload)
             print(f"Successfully broadcasted state for session {session_id}")
         else:
@@ -219,6 +233,18 @@ def get_db():
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the Vyuha VTT Backend!"}
+
+def log_event(db: Session, session_id: int, event_type: str, actor_id: int | None = None, target_id: int | None = None, details: dict | None = None):
+    """Creates and saves a new structured log entry to the database."""
+    new_entry = models.GameLogEntry(
+        session_id=session_id,
+        event_type=event_type,
+        actor_id=actor_id,
+        target_id=target_id,
+        details=details if details else {}
+    )
+    db.add(new_entry)
+    db.commit()
 
 def generate_access_code(length: int = 6) -> str:
     """Generates a random alphanumeric access code."""
@@ -287,10 +313,10 @@ async def join_session(join_request: JoinRequest, background_tasks: BackgroundTa
     db.add(new_player)
     db.commit()
     db.refresh(new_player)
+    log_event(db, session.id, 'player_join', details={"player_name": new_player.display_name})
     
-    # Broadcast the updated session state to everyone in the lobby
     background_tasks.add_task(manager.broadcast_session_state, session.id, db)
-    
+    await manager.broadcast_json(session.id, json.dumps({"type": "new_log_entry"}))
     return {
         "player": PlayerSchema.model_validate(new_player),
         "session": GameSessionSchema.model_validate(session)
@@ -438,19 +464,30 @@ async def update_session(session_id: int, session_update: GameSessionUpdate, bac
     
     # ... (The logic inside this function remains the same)
     update_data = session_update.model_dump(exclude_unset=True)
-    if "current_mode" in update_data: session.current_mode = update_data["current_mode"]
+    if "current_mode" in update_data: 
+        session.current_mode = update_data["current_mode"]
+        log_event(db, session_id, 'mode_change', details={'new_mode': session.current_mode})
     if "active_loka_resonance" in update_data: session.active_loka_resonance = update_data["active_loka_resonance"]
     if session_update.participant_positions:
         for pos_data in session_update.participant_positions:
             p = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == pos_data.participant_id, models.SessionCharacter.session_id == session_id).first()
-            if p: p.x_pos = pos_data.x_pos; p.y_pos = pos_data.y_pos
+            if p: 
+                if p.x_pos is None and pos_data.x_pos is not None:
+                    log_event(db, session_id, 'token_place', actor_id=p.id, 
+                              details={'character_name': p.character.name, 
+                                       'pos': {'x': pos_data.x_pos, 'y': pos_data.y_pos}})
+                else:
+                    log_event(db, session_id, 'token_move', details={
+                        "character_name": p.character.name,
+                        "pos": {"x": pos_data.x_pos, "y": pos_data.y_pos}
+                    })
+                p.x_pos = pos_data.x_pos
+                p.y_pos = pos_data.y_pos
     
     db.commit()
-    
-    updated_schema = GameSessionSchema.model_validate(session)
-    background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
-
-    return updated_schema
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    return GameSessionSchema.model_validate(session)
 
 @app.post("/sessions/{session_id}/add_character", response_model=GameSessionSchema)
 async def add_character_to_session(session_id: int, request: AddCharacterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -466,7 +503,6 @@ async def add_character_to_session(session_id: int, request: AddCharacterRequest
     if not all([session, character, requesting_user]):
         raise HTTPException(status_code=404, detail="Session, Character, or Requesting User not found.")
 
-    # --- THIS IS THE NEW LOGIC ---
     is_request_from_gm = (session.gm_id == requesting_user.id)
 
     # For a regular player, check ownership and the 1-character limit
@@ -480,7 +516,7 @@ async def add_character_to_session(session_id: int, request: AddCharacterRequest
         ).first()
         if existing_participant:
             raise HTTPException(status_code=400, detail="Player already has a character in this session.")
-    
+        
     # If the request is from the GM, they must own the character template
     elif is_request_from_gm and character.owner_id != session.gm_id:
          raise HTTPException(status_code=403, detail="GM does not own this character template.")
@@ -500,10 +536,10 @@ async def add_character_to_session(session_id: int, request: AddCharacterRequest
 
     db.add(new_participant)
     db.commit()
-
+    log_event(db, session_id, 'character_select', actor_id=new_participant.id, details={"player_name": requesting_user.display_name, "character_name": character.name})
     background_tasks.add_task(manager.broadcast_session_state, session_id, db)
-    
-    return session
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    return GameSessionSchema.model_validate(session)
 
 @app.delete("/sessions/{session_id}/participants/{participant_id}", response_model=GameSessionSchema)
 async def remove_character_from_session(session_id: int, participant_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -528,30 +564,51 @@ async def remove_character_from_session(session_id: int, participant_id: int, ba
     
     return session
 
+# app/main.py
+
 @app.post("/sessions/{session_id}/begin_combat", response_model=GameSessionSchema)
-async def begin_combat(session_id: int, background_tasks: BackgroundTasks,db: Session = Depends(get_db)):
-    # ... (The logic inside this function remains the same)
+async def begin_combat(session_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
-    if not session or session.current_mode != 'staging': raise HTTPException(status_code=400, detail="Not in staging.")
+    if not session or session.current_mode != 'staging':
+        raise HTTPException(status_code=400, detail="Not in staging.")
+
     initiative_results = []
     for p in session.participants:
-        dakshata_mod = game_rules.get_attribute_modifier(p.character.dakshata)
-        roll = random.randint(1, 20)
-        initiative_results.append({"participant_id": p.id, "score": roll + dakshata_mod, "dakshata": p.character.dakshata})
-        p.status = 'active'
-    initiative_results.sort(key=lambda x: (x['score'], x['dakshata']), reverse=True)
-    session.turn_order = [result['participant_id'] for result in initiative_results]
-    session.current_turn_index = 0; session.current_mode = 'combat'
-    if session.turn_order:
-        first_char = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == session.turn_order[0]).first()
-        if first_char: first_char.remaining_speed = first_char.character.movement_speed
+        if p.character: # Safety check
+            dakshata_mod = game_rules.get_attribute_modifier(p.character.dakshata)
+            roll = random.randint(1, 20)
+            total_score = roll + dakshata_mod
+            
+            log_event(db, session_id, 'initiative_roll', actor_id=p.id, details={
+                "character_name": p.character.name,
+                "roll": roll,
+                "modifier": dakshata_mod,
+                "total": total_score
+            })
+
+            initiative_results.append({
+                "participant_id": p.id,
+                "score": total_score,
+                "dakshata": p.character.dakshata,
+                "participant_name": p.character.name
+            })
+            p.status = 'active'
     
+    initiative_results.sort(key=lambda x: (x['score'], x['dakshata']), reverse=True)
+    
+    session.turn_order = [result['participant_id'] for result in initiative_results]
+    session.current_turn_index = 0
+    session.current_mode = 'combat'
+    
+    order_string = " > ".join([res['participant_name'] for res in initiative_results])
+    log_event(db, session_id, 'turn_order_set', details={"order": order_string})
+
     db.commit()
 
-    updated_schema = GameSessionSchema.model_validate(session)
-    background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
-
-    return updated_schema
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    
+    return GameSessionSchema.from_orm(session)
 
 
 # --- THE GAME ENGINE ---
@@ -578,9 +635,12 @@ async def perform_action(session_id: int, action: GameAction, background_tasks: 
         actor.x_pos = action.new_x
         actor.y_pos = action.new_y
         actor.remaining_speed -= distance # Subtract the distance moved
-        
+        log_event(db, session_id, 'move', actor_id=actor.id, details={
+            "character_name": actor.character.name,
+            "new_pos": {"x": action.new_x, "y": action.new_y}
+        })
 
-        message = f"{actor.character.name} moves to ({action.new_x}, {action.new_y}). Remaining speed: {actor.remaining_speed}."
+        
 
     elif action.action_type == "ATTACK":
         target = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == action.target_id).first()
@@ -590,7 +650,11 @@ async def perform_action(session_id: int, action: GameAction, background_tasks: 
         distance = max(abs(actor.x_pos - target.x_pos), abs(actor.y_pos - target.y_pos))
         if distance > ability.range:
             # Instead of raising an error, we just set the message.
-            message = f"{actor.character.name}'s {ability.name} fails: {target.character.name} is out of range! (Range: {ability.range}, Distance: {distance})"
+            log_event(db, session_id, 'out_of_range', actor_id=actor.id, target_id=target.id, details={
+                "actor_name": actor.character.name,
+                "target_name": target.character.name,
+                "ability_name": ability.name
+            })
         else:
             # The rest of the attack logic only runs if the target is in range.
             to_hit_mod = game_rules.get_attribute_modifier(getattr(actor.character, ability.to_hit_attribute))
@@ -607,28 +671,29 @@ async def perform_action(session_id: int, action: GameAction, background_tasks: 
                 damage_roll = sum(random.randint(1, dice) for _ in range(num))
                 total_damage = max(0, damage_roll + damage_mod)
                 target.current_prana = max(0, target.current_prana - total_damage)
-                message = (f"{actor.character.name}'s {ability.name} hits {target.character.name}! "
-                           f"(Roll: {attack_roll} + Mod: {to_hit_mod} = {total_attack} vs DC {evasion_dc}). "
-                           f"Deals {total_damage} damage. {target.character.name} has {target.current_prana} Prāṇa remaining.")
+                log_event(db, session_id, 'attack_hit', actor_id=actor.id, target_id=target.id, details={
+                "actor_name": actor.character.name,
+                "target_name": target.character.name,
+                "ability_name": ability.name,
+                "roll": attack_roll, "modifier": to_hit_mod, "total": total_attack, "dc": evasion_dc,
+                "damage": total_damage
+            })
                 if target.current_prana == 0:
                     target.status = "downed"
-                    message += f" {target.character.name} is downed!"
+                    log_event(db, session_id, 'status_change', target_id=target.id, details={"character_name": target.character.name, "new_status": "downed"})
             else:
-                message = (f"{actor.character.name}'s {ability.name} misses {target.character.name}! "
-                           f"(Roll: {attack_roll} + Mod: {to_hit_mod} = {total_attack} vs DC {evasion_dc}).")
-    if message:
-        # Prepend the new message to the session's log.
-        # We check `session.log` exists to avoid errors on older sessions in your DB.
-        current_log = session.log if session.log else []
-        new_log = [message] + current_log
-        # Limit the log to the most recent 50 messages to prevent it from getting too large.
-        session.log = new_log[:50]
-    # <--- MODIFICATION END --->
-    db.commit()
-    updated_schema = GameSessionSchema.model_validate(session)
-    background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
+                log_event(db, session_id, 'attack_miss', actor_id=actor.id, target_id=target.id, details={
+                "actor_name": actor.character.name,
+                "target_name": target.character.name,
+                "ability_name": ability.name,
+                "roll": attack_roll, "modifier": to_hit_mod, "total": total_attack, "dc": evasion_dc
+            })
     
-    return {"session": updated_schema, "message": message}
+    db.commit()
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    
+    return {"session": GameSessionSchema.model_validate(session), "message": message}
 
 @app.post("/sessions/{session_id}/next_turn", response_model=GameSessionSchema)
 async def next_turn(session_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -644,10 +709,10 @@ async def next_turn(session_id: int, background_tasks: BackgroundTasks, db: Sess
     
     db.commit()
 
-    updated_schema = GameSessionSchema.model_validate(session)
-    background_tasks.add_task(manager.broadcast_json, session_id, updated_schema.model_dump_json())
+    
+    background_tasks.add_task(manager.broadcast_session_state, session.id, db)
 
-    return updated_schema
+    return GameSessionSchema.model_validate(session)
 
 @app.post("/sessions/{session_id}/end_combat", response_model=GameSessionSchema)
 async def end_combat(session_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -659,11 +724,12 @@ async def end_combat(session_id: int, background_tasks: BackgroundTasks, db: Ses
         raise HTTPException(status_code=400, detail="Session is not in combat.")
 
     session.current_mode = 'exploration'
+    log_event(db, session_id, 'mode_change', details={"new_mode": "exploration"})
     db.commit()
-
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
     # Broadcast the updated state to all players
     background_tasks.add_task(manager.broadcast_session_state, session.id, db)
-    return session
+    return GameSessionSchema.model_validate(session)
 
 @app.post("/sessions/{session_id}/add_npcs", response_model=GameSessionSchema)
 async def add_npcs_to_session(session_id: int, request: AddNpcsRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -698,7 +764,7 @@ async def add_npcs_to_session(session_id: int, request: AddNpcsRequest, backgrou
     db.commit()
 
     background_tasks.add_task(manager.broadcast_session_state, session_id, db)
-    return session
+    return GameSessionSchema.model_validate(session)
 
 @app.post("/sessions/{session_id}/update_npcs/", response_model=GameSessionSchema)
 async def update_session_npcs(session_id: int, request: UpdateNpcsRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -741,5 +807,11 @@ async def update_session_npcs(session_id: int, request: UpdateNpcsRequest, backg
             db.add(new_npc)
 
     db.commit()
-    background_tasks.add_task(manager.broadcast_session_state, session.id, db)
-    return session
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    return GameSessionSchema.model_validate(session)
+
+@app.get("/sessions/{session_id}/log", response_model=List[GameLogEntrySchema])
+def get_session_log(session_id: int, db: Session = Depends(get_db)):
+    """Fetches all log entries for a session, ordered by timestamp."""
+    log_entries = db.query(models.GameLogEntry).filter(models.GameLogEntry.session_id == session_id).order_by(models.GameLogEntry.timestamp.asc()).all()
+    return log_entries

@@ -125,13 +125,50 @@
   gap: 20px;
 }
 
-.initiative-tracker,
-.action-panel,
-.game-log {
-  background-color: #2a2a2a;
-  padding: 10px 15px;
-  border-radius: 8px;
-  border: 1px solid #444;
+.context-panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: 100%; /* Ensure it fills the panel */
+}
+
+.initiative-tracker {
+  flex-shrink: 0; /* Prevent it from shrinking */
+  max-height: 50%; /* Don't let it take more than half the panel */
+  display: flex;
+  flex-direction: column;
+}
+.initiative-tracker h3 {
+  margin: 0 0 0.5rem 0;
+  padding: 0;
+}
+
+.initiative-tracker ol {
+  flex-grow: 1; /* Allow the list to take up the remaining space */
+  overflow-y: auto; /* Make ONLY the list scrollable */
+  margin: 0;
+  padding: 0 0 0 1.5rem; /* Indent the numbers */
+}
+.action-panel {
+  flex-grow: 1;
+}
+
+
+.log-messages-container {
+  flex-grow: 1; 
+  overflow-y: auto; 
+  padding: 0 1rem 1rem 1rem; 
+}
+
+.log-message {
+  margin: 0 0 0.5rem 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.9rem;
+}
+
+.log-message:last-child {
+  border-bottom: none;
 }
 
 .initiative-tracker ol,
@@ -328,13 +365,34 @@ body {
 
 /* --- Lobby Page Styles --- */
 .lobby-page {
-  max-width: 600px;
+  display: grid;
+  grid-template-columns: 1fr 400px; /* Main content on the left, log on the right */
+  gap: 2rem;
+  max-width: 1000px;
   margin: 4rem auto;
-  padding: 2rem;
+  padding: 0 2rem;
+}
+
+.lobby-main-content {
   background-color: var(--surface-color);
+  padding: 2rem;
   border-radius: 8px;
   border: 1px solid var(--border-color);
   text-align: center;
+}
+
+.lobby-game-log {
+  background-color: var(--surface-color);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  height: 600px; 
+  display: flex; 
+  flex-direction: column; 
+  padding: 1rem; 
+}
+
+.lobby-game-log .game-log {
+  flex-grow: 1; 
 }
 
 .access-code {
@@ -806,6 +864,10 @@ body {
 }
 
 .gm-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
   position: fixed;
   top: 10px;
   right: 10px;
@@ -1022,4 +1084,38 @@ body {
 }
 .avatar-container[draggable="true"]:active {
   cursor: grabbing;
+}
+
+
+.log-system { color: #888; font-style: italic; }
+.log-hit { color: #2ecc71; font-weight: bold; }
+.log-miss { color: #e74c3c; font-weight: bold; }
+.log-damage { color: #ffc107; font-weight: bold; }
+.log-dice { color: #999; }
+.log-type-attack_miss .log-dice { text-decoration: line-through; }
+
+.clear-storage-btn {
+  background: #555;
+  border: 1px solid var(--border-color);
+  color: white;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background-color 0.2s;
+}
+
+.clear-storage-btn:hover {
+  background-color: #c0392b; /* Red on hover to indicate danger */
+}
+
+.log-total {
+  font-weight: bold;
+  color: var(--primary-color);
 }

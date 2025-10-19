@@ -4,8 +4,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import CharacterCreator from './CharacterCreator'; // Import the new component
 import NpcManager from './NpcManager';
+import GameLog from './GameLog';
 
-function Lobby({ sessionData, playerData }) {
+function Lobby({ sessionData, playerData , newLogTrigger }) {
   const [playersInLobby, setPlayersInLobby] = useState([]);
   const [myCharacters, setMyCharacters] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -105,6 +106,7 @@ const handleDeselectCharacter = async () => {
         />
       )}
     <div className="lobby-page">
+      <div className="lobby-main-content">
       <h1>Campaign: {sessionData.campaign_name}</h1>
       <h2>Lobby</h2>
       
@@ -185,6 +187,15 @@ const handleDeselectCharacter = async () => {
       )}
       {!isGM && !myParticipantEntry && <p>Select a character to be ready.</p>}
       {!isGM && myParticipantEntry && <p className="waiting-text">Waiting for the GM to start the game...</p>}
+    </div>
+    <div className="lobby-game-log">
+            <div><h3>Game Log</h3></div>
+            <GameLog 
+                sessionId={sessionData.id}
+                participants={sessionData.participants}
+                newLogTrigger={newLogTrigger}
+            />
+        </div>
     </div>
     </>
   );

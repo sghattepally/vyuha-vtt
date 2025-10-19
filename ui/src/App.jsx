@@ -15,6 +15,7 @@ function App() {
   const [isGmOverride, setIsGmOverride] = useState(false);
   const [error, setError] = useState('');
   const dragPreviewRef = useRef(null);
+  const [newLogTrigger, setNewLogTrigger] = useState(0);
 
   // Effect #1: Load initial state from localStorage on startup.
   useEffect(() => {
@@ -25,7 +26,10 @@ function App() {
       setPlayerData(JSON.parse(savedPlayer));
     }
   }, []); // Runs only once.
-
+  const handleClearLocalStorage = () => {
+      localStorage.clear();
+      window.location.reload();
+  };
   // Effect #2: Manage the WebSocket connection. Its ONLY job is to update sessionData.
   useEffect(() => {
     // Don't connect until we have the necessary IDs.
@@ -34,13 +38,14 @@ function App() {
     const ws = new WebSocket(`ws://localhost:8000/ws/${sessionData.id}/${playerData.id}`);
     ws.onopen = () => console.log("WebSocket Connected!");
     ws.onmessage = (event) => {
-      const updatedSessionData = JSON.parse(event.data);
-      console.log("Received server update. New mode:", updatedSessionData.current_mode);
-      
-      // Update the single source of truth. This triggers a re-render.
-      setSessionData(updatedSessionData); 
-      localStorage.setItem('vyuhaSession', JSON.stringify(updatedSessionData));
-    };
+      const message = JSON.parse(event.data);
+      if (message.type === 'session_update') {
+      setSessionData(message.data);
+      localStorage.setItem('vyuhaSession', JSON.stringify(message.data));
+    } else if (message.type === 'new_log_entry') {
+      setNewLogTrigger(prev => prev + 1);
+    }
+  };
     ws.onerror = (err) => console.error("WebSocket Error:", err);
     ws.onclose = () => console.log("WebSocket Closed.");
 
@@ -95,7 +100,7 @@ function App() {
 
   if (sessionData.current_mode === 'lobby') {
     // If the session mode is 'lobby', show the lobby.
-    return <Lobby sessionData={sessionData} playerData={playerData} />;
+    return <Lobby sessionData={sessionData} playerData={playerData} newLogTrigger={newLogTrigger}/>;
   }
 
   if (['exploration', 'staging', 'combat'].includes(sessionData.current_mode)) {
@@ -104,6 +109,9 @@ function App() {
     return (
       <>
         <div className="gm-toggle">
+          <button onClick={handleClearLocalStorage} className="clear-storage-btn" title="Clear Local Storage & Refresh">
+            🗑️
+          </button>
           <label>
             <input 
               type="checkbox" 
@@ -123,7 +131,8 @@ function App() {
           currentUser={playerData} 
           isGM={isGM}
           dragPreviewRef={dragPreviewRef}
-          isGmOverride={isGmOverride} // Pass the override state down
+          isGmOverride={isGmOverride} 
+          newLogTrigger={newLogTrigger}
         />
       </>
     );

@@ -2,7 +2,8 @@
 
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
-from sqlalchemy.types import JSON
+from sqlalchemy.types import JSON, DateTime
+from sqlalchemy.sql import func
 import os 
 from dotenv import load_dotenv 
 
@@ -90,6 +91,17 @@ class GameSession(Base):
     active_loka_resonance = Column(String, default='none')
     turn_order = Column(JSON, default=[])
     current_turn_index = Column(Integer, default=0)
-    log = Column(JSON, default=[])
     access_code = Column(String, unique=True, index=True, nullable=True)
     participants = relationship("SessionCharacter", back_populates="session")
+    log_entries = relationship("GameLogEntry", back_populates="session", cascade="all, delete-orphan")
+
+class GameLogEntry(Base):
+    __tablename__ = "game_log_entries"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=False)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+    event_type = Column(String, nullable=False) # e.g., 'player_join', 'attack_roll'
+    actor_id = Column(Integer, ForeignKey("session_characters.id"), nullable=True)
+    target_id = Column(Integer, ForeignKey("session_characters.id"), nullable=True)
+    details = Column(JSON, nullable=True) 
+    session = relationship("GameSession", back_populates="log_entries")

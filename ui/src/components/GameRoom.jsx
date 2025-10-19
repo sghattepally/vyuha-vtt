@@ -12,14 +12,14 @@ import NpcManager from './NpcManager';
 import PartyPanel from './PartyPanel';
 
 const initialLayout = [
-  { i: 'party', x: 0, y: 0, w: 7, h: 4, minW: 3, minH: 3 },
-  { i: 'log', x: 7, y: 0, w: 5, h: 4, minW: 2, minH: 3 },
-  { i: 'main', x: 3, y: 4, w: 9, h: 9, minW: 4, minH: 5 },
-  { i: 'context', x: 0, y: 4, w: 3, h: 9, minW: 2, minH: 5 },
+  { i: 'party', x: 0, y: 0, w: 6, h: 4, minW: 3, minH: 3 },
+  { i: 'log', x: 6, y: 0, w: 5, h: 4, minW: 2, minH: 3 },
+  { i: 'main', x: 3, y: 4, w: 8, h: 7, minW: 4, minH: 5 },
+  { i: 'context', x: 0, y: 4, w: 3, h: 7, minW: 2, minH: 5 },
 ];
 const COLLAPSED_HEIGHT = 1;
 
-function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef }) {
+function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef , newLogTrigger }) {
   const [selectedAction, setSelectedAction] = useState({ type: 'none', ability: null });
   const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
   const [turnActions, setTurnActions] = useState({ hasAttacked: false });
@@ -189,7 +189,10 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
           <div key="log">
             <Panel title="Game Log" onCollapse={() => togglePanelCollapse('log')}
               isCollapsed={layout.find(p => p.i === 'log')?.h === COLLAPSED_HEIGHT}>
-              <GameLog messages={sessionData.log || []} />
+              <GameLog 
+            sessionId={sessionData.id} 
+      participants={sessionData.participants}
+      newLogTrigger={newLogTrigger} />
             </Panel>
           </div>
 
@@ -242,6 +245,7 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
 
           <div key="context">
             <Panel title="Context" onCollapse={() => togglePanelCollapse('context')}
+            contentClassName="context-panel-content"
               isCollapsed={layout.find(p => p.i === 'context')?.h === COLLAPSED_HEIGHT}>
               {effectiveIsGM && (
                 <div className="gm-context-controls">
@@ -252,8 +256,6 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
                       <button onClick={() => setIsNpcManagerOpen(true)}>Manage NPCs</button>
                     </>
                   )}
-
-                  {/* This button only shows during STAGING */}
                   {sessionData.current_mode === 'staging' && (
                     <button onClick={handleBeginCombat}>Begin Combat</button>
                   )}

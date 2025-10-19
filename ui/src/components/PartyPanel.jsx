@@ -17,7 +17,6 @@ function PartyPanel({ participants, currentUser, isGM, sessionMode, dragPreviewR
             isDraggable={isDraggable}
             // This function's only job is to set the data.
             onAvatarDragStart={(e) => {
-              console.log(`PartyPanel: Setting data for participantId=${p.id}`);
               e.dataTransfer.setData("participantId", p.id);
             }}
             dragPreviewRef={dragPreviewRef}
