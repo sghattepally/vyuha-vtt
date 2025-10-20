@@ -627,6 +627,7 @@ async def add_character_to_session(session_id: int, request: AddCharacterRequest
         current_prana=char_schema.max_prana,
         current_tapas=char_schema.max_tapas,
         current_maya=char_schema.max_maya,
+        remaining_speed=char_schema.movement_speed,
         x_pos=None,
         y_pos=None
     )
@@ -932,7 +933,8 @@ async def update_session_npcs(session_id: int, request: UpdateNpcsRequest, backg
                 player_id=session.gm_id, # NPCs are "owned" by the GM in a session
                 current_prana=char_schema.max_prana, 
                 current_tapas=char_schema.max_tapas, 
-                current_maya=char_schema.max_maya
+                current_maya=char_schema.max_maya,
+                remaining_speed=char_schema.movement_speed
             )
             db.add(new_npc)
 
