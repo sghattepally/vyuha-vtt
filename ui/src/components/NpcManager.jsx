@@ -8,9 +8,6 @@ function NpcManager({ sessionId, sessionParticipants, gmId, onClose }) {
   const [error, setError] = useState('');
 
   const [selectedNpcIds, setSelectedNpcIds] = useState(() => {
-    // --- THIS IS THE FIX ---
-    // We now check if sessionParticipants is a valid array before trying to use it.
-    // If it's not, we default to an empty array, preventing the crash.
     const initialParticipants = Array.isArray(sessionParticipants) ? sessionParticipants : [];
     
     const initialIds = initialParticipants
@@ -81,7 +78,7 @@ function NpcManager({ sessionId, sessionParticipants, gmId, onClose }) {
                     checked={selectedNpcIds.has(char.id)}
                     onChange={() => handleCheckboxChange(char.id)}
                   />
-                  {char.name} - ({char.character_class})
+                  {char.name} - Lvl {char.level} - {char.race.name} - {char.char_class.name}
                 </label>
               </div>
             ))

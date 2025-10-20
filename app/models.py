@@ -38,26 +38,78 @@ class Ability(Base):
     status_effect = Column(String, nullable=True)
     range = Column(Integer, default=1)
 
+class Race(Base):
+    __tablename__ = "races"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    description = Column(String)
+    
+    # --- Racial Attribute Modifiers ---
+    # Storing these as separate columns for clarity and performance.
+    bala_mod = Column(Integer, default=0)
+    dakshata_mod = Column(Integer, default=0)
+    dhriti_mod = Column(Integer, default=0)
+    buddhi_mod = Column(Integer, default=0)
+    prajna_mod = Column(Integer, default=0)
+    samkalpa_mod = Column(Integer, default=0)
+    
+    # This relationship will link Races back to Characters.
+    characters = relationship("Character", back_populates="race")
+
+class Char_Class(Base):
+    __tablename__ = "char_classes"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    description = Column(String)
+    primary_attribute = Column(String) # e.g., "Bala" or "Buddhi"
+    
+    # --- Base Attribute Scores ---
+    # This is the starting point for a character's attributes, 
+    # determined by their class.
+    base_bala = Column(Integer, default=10)
+    base_dakshata = Column(Integer, default=10)
+    base_dhriti = Column(Integer, default=10)
+    base_buddhi = Column(Integer, default=10)
+    base_prajna = Column(Integer, default=10)
+    base_samkalpa = Column(Integer, default=10)
+    default_abilities = Column(JSON, default=list)
+    # This relationship will link Classes back to Characters.
+    characters = relationship("Character", back_populates="char_class")
+    subclasses = relationship("Subclass", back_populates="base_class")
+
+class Subclass(Base):
+    __tablename__ = "subclasses"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    description = Column(String)
+
+    # --- Subclass-Specific Rules ---
+    level_requirement = Column(Integer, default=3)
+    tapas_bonus = Column(Integer, default=0)
+    maya_bonus = Column(Integer, default=0)
+    
+    # --- Foreign Key to the Base Class ---
+    base_class_id = Column(Integer, ForeignKey('char_classes.id'))
+
+    # --- Relationships ---
+    base_class = relationship("Char_Class", back_populates="subclasses")
+
 class Character(Base):
     __tablename__ = "characters"
     id = Column(Integer, primary_key=True, index=True)
-    owner_id = Column(Integer, ForeignKey("users.id"))
-    owner = relationship("User")
     name = Column(String, index=True)
-    race = Column(String)
-    character_class = Column(String)
-    bala = Column(Integer, default=10)
-    dakshata = Column(Integer, default=10)
-    dhriti = Column(Integer, default=10)
-    buddhi = Column(Integer, default=10)
-    prajna = Column(Integer, default=10)
-    samkalpa = Column(Integer, default=10)
-    max_prana = Column(Integer, default=10)
-    max_tapas = Column(Integer, default=4)
-    max_maya = Column(Integer, default=4)
+    owner_id = Column(Integer, ForeignKey("users.id"))
+    race_id = Column(Integer, ForeignKey("races.id"))
+    char_class_id = Column(Integer, ForeignKey("char_classes.id"))
+    owner = relationship("User", back_populates="characters")
+    race = relationship("Race", back_populates="characters")
+    char_class = relationship("Char_Class", back_populates="characters")
+    subclass_id = Column(Integer, ForeignKey('subclasses.id'), nullable=True)
+    subclass = relationship("Subclass")
     level = Column(Integer, default=1)
     unlocked_loka_attunement = Column(String, nullable=True)
     movement_speed = Column(Integer, default=6)
+    session_characters = relationship("SessionCharacter", back_populates="character")
 
 # --- Junction / Link Tables ---
 class CharacterAbility(Base):

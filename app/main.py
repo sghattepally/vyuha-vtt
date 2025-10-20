@@ -25,6 +25,9 @@ models.Base.metadata.create_all(bind=engine)
 # ==================================
 # 3. Pydantic Schemas
 # ==================================
+def get_modifier(score: int) -> int:
+    return (score - 10) // 2
+
 # --- User Schemas ---
 class PlayerCreate(pydantic.BaseModel):
     display_name: str
@@ -56,6 +59,34 @@ class AbilitySchema(AbilityCreate):
     class Config:
         from_attributes = True
 
+
+class RaceSchema(pydantic.BaseModel):
+    name: str
+    description: str
+    bala_mod: int
+    dakshata_mod: int
+    dhriti_mod: int
+    buddhi_mod: int
+    prajna_mod: int
+    samkalpa_mod: int
+
+    class Config:
+        from_attributes = True
+
+class CharClassSchema(pydantic.BaseModel):
+    name: str
+    description: str
+    primary_attribute: str
+    base_bala: int
+    base_dakshata: int
+    base_dhriti: int
+    base_buddhi: int
+    base_prajna: int
+    base_samkalpa: int
+
+    class Config:
+        from_attributes = True
+
 # --- Character Schemas ---
 class CharacterAbilityCreate(pydantic.BaseModel):
     ability_id: int
@@ -63,25 +94,63 @@ class CharacterAbilityCreate(pydantic.BaseModel):
 class CharacterCreate(pydantic.BaseModel):
     name: str
     race: str
-    character_class: str
+    char_class: str
     owner_id: int
 
 class CharacterSchema(pydantic.BaseModel):
     id: int
     name: str
-    race: str
-    character_class: str
+    race: RaceSchema
+    char_class: CharClassSchema
+    owner_id: int
     level: int
-    bala: int
-    dakshata: int
-    dhriti: int
-    buddhi: int
-    prajna: int
-    samkalpa: int
-    max_prana: int
-    max_tapas: int
-    max_maya: int
     movement_speed: int
+    @pydantic.computed_field
+    def bala(self) -> int:
+        return self.char_class.base_bala + self.race.bala_mod
+
+    @pydantic.computed_field
+    def dakshata(self) -> int:
+        return self.char_class.base_dakshata + self.race.dakshata_mod
+
+    @pydantic.computed_field
+    def dhriti(self) -> int:
+        return self.char_class.base_dhriti + self.race.dhriti_mod
+
+    @pydantic.computed_field
+    def buddhi(self) -> int:
+        return self.char_class.base_buddhi + self.race.buddhi_mod
+
+    @pydantic.computed_field
+    def prajna(self) -> int:
+        return self.char_class.base_prajna + self.race.prajna_mod
+
+    @pydantic.computed_field
+    def samkalpa(self) -> int:
+        return self.char_class.base_samkalpa + self.race.samkalpa_mod
+    
+    # Also calculate secondary stats
+    @pydantic.computed_field
+    def max_prana(self) -> int:
+        # Prana is based on Fortitude (Dhriti)
+        return 10 + (self.level * get_modifier(self.dhriti))
+
+    @pydantic.computed_field
+    def max_tapas(self) -> int:
+        # Tapas is the sum of Deha (Body) attribute modifiers
+        bala_mod = get_modifier(self.bala)
+        dakshata_mod = get_modifier(self.dakshata)
+        dhriti_mod = get_modifier(self.dhriti)
+        return bala_mod + dakshata_mod + dhriti_mod
+
+    @pydantic.computed_field
+    def max_maya(self) -> int:
+        # Māyā is the sum of Ātman (Spirit) attribute modifiers
+        buddhi_mod = get_modifier(self.buddhi)
+        prajna_mod = get_modifier(self.prajna)
+        samkalpa_mod = get_modifier(self.samkalpa)
+        return buddhi_mod + prajna_mod + samkalpa_mod
+
     class Config:
         from_attributes = True
 
@@ -250,20 +319,17 @@ def generate_access_code(length: int = 6) -> str:
     """Generates a random alphanumeric access code."""
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
-@app.get("/rules/races", response_model=List[str])
-def get_races():
-    """Returns a list of all available player races."""
-    # This list is based on your Player's Handbook
-    return [
-        "Manushya", "Vaanara", "Yaksha", "Gandharva", 
-        "Apsara", "Kinnara", "Vidyadhara", "Naga", "Asura"
-    ]
+@app.get("/rules/races", response_model=List[RaceSchema])
+def get_races(db: Session = Depends(get_db)):
+    """Fetches all playable races with their full details from the database."""
+    races = db.query(models.Race).order_by(models.Race.name).all()
+    return races
 
-@app.get("/rules/classes", response_model=List[str])
-def get_classes():
-    """Returns a list of all available player classes."""
-    # This dynamically gets the class names from your game_rules file
-    return list(game_rules.CLASS_TEMPLATES.keys())
+@app.get("/rules/classes", response_model=List[CharClassSchema])
+def get_classes(db: Session = Depends(get_db)):
+    """Fetches all playable classes with their full details from the database."""
+    classes = db.query(models.Char_Class).order_by(models.Char_Class.name).all()
+    return classes
 
 @app.websocket("/ws/{session_id}/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: int, user_id: int):
@@ -342,41 +408,65 @@ def read_all_abilities(db: Session = Depends(get_db)):
 # --- CHARACTER ENDPOINTS ---
 @app.post("/characters/", response_model=CharacterSchema)
 def create_character(character_input: CharacterCreate, db: Session = Depends(get_db)):
-    template = game_rules.CLASS_TEMPLATES.get(character_input.character_class)
-    if not template: raise HTTPException(status_code=400, detail="Invalid character class")
-    dhriti_mod = game_rules.get_attribute_modifier(template["attributes"]["dhriti"])
-    character_data = {
-        "name": character_input.name, "race": character_input.race,
-        "character_class": character_input.character_class, "owner_id": character_input.owner_id,
-        "max_prana": 10 + dhriti_mod,
-        "max_tapas": template["max_tapas"], "max_maya": template["max_maya"],
-        **template["attributes"]
-    }
-    new_character = models.Character(**character_data)
-    db.add(new_character); db.commit(); db.refresh(new_character)
-    DEFAULT_ABILITIES = {
-        "Yodha": "Gada Strike",
-        "Dhanurdhara": "Longbow Shot",
-        "Chara": "Dagger Strike",
-        "Rishi": "Agni Mantra",
-        "Sutradhara": "Dagger Strike"
-    }
-    
-    ability_name_to_learn = DEFAULT_ABILITIES.get(new_character.character_class)
-    
-    if ability_name_to_learn:
-        # Find the ability in the database
-        ability_to_learn = db.query(models.Ability).filter(models.Ability.name == ability_name_to_learn).first()
+    """
+    Creates a new character, links it to a race and class from the database,
+    and assigns default abilities defined in that class's database record.
+    """
+    # Look up the chosen Race and Class in the database.
+    db_race = db.query(models.Race).filter(models.Race.name == character_input.race).first()
+    if not db_race:
+        raise HTTPException(status_code=400, detail=f"Invalid race: {character_input.race}")
+
+    db_class = db.query(models.Char_Class).filter(models.Char_Class.name == character_input.char_class).first()
+    if not db_class:
+        raise HTTPException(status_code=400, detail=f"Invalid class: {character_input.char_class}")
+
+    # Create the base character record using data from the input schema
+    new_character = models.Character(
+        name=character_input.name,
+        owner_id=character_input.owner_id,
+        race_id=db_race.id,
+        char_class_id=db_class.id
+    )
+    db.add(new_character)
+    db.commit()
+    db.refresh(new_character)
+
+    # Assign default abilities
+    if db_class.default_abilities:
+        abilities_to_learn = db.query(models.Ability).filter(
+            models.Ability.name.in_(db_class.default_abilities)
+        ).all()
         
-        if ability_to_learn:
-            # Create the link between the new character and the ability
+        for ability in abilities_to_learn:
             new_link = models.CharacterAbility(
-                character_id=new_character.id, 
-                ability_id=ability_to_learn.id
+                character_id=new_character.id,
+                ability_id=ability.id
             )
             db.add(new_link)
-            db.commit()
-            print(f"Assigned '{ability_name_to_learn}' to new character '{new_character.name}'")
+        
+        db.commit()
+
+    return new_character
+
+    # Step 3: Assign default abilities using the list from the class's DB record.
+    if db_class.default_abilities:
+        abilities_to_learn = db.query(models.Ability).filter(
+            models.Ability.name.in_(db_class.default_abilities)
+        ).all()
+        
+        for ability in abilities_to_learn:
+            # Use the existing CharacterAbility junction object to create the link.
+            new_link = models.CharacterAbility(
+                character_id=new_character.id,
+                ability_id=ability.id
+            )
+            db.add(new_link)
+        
+        db.commit()
+        print(f"Assigned default abilities to '{new_character.name}'")
+
+    # Step 4: Return the character. The Pydantic schema will handle all stat calculations.
     return new_character
 
 @app.get("/users/{user_id}/characters", response_model=List[CharacterSchema])
@@ -494,18 +584,23 @@ async def add_character_to_session(session_id: int, request: AddCharacterRequest
     """
     Adds a character to the game session.
     - If added by a player, enforces a 1-character limit.
-    - If added by the GM, bypasses the limit and adds as an NPC (player_id=NULL).
+    - If added by the GM, it is treated as an NPC.
     """
     session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
-    character = db.query(models.Character).filter(models.Character.id == request.character_id).first()
     requesting_user = db.query(models.User).filter(models.User.id == request.player_id).first()
+
+    # REFACTOR: Eagerly load the character with its race and class for stat calculations.
+    character = db.query(models.Character).options(
+        joinedload(models.Character.race),
+        joinedload(models.Character.char_class)
+    ).filter(models.Character.id == request.character_id).first()
 
     if not all([session, character, requesting_user]):
         raise HTTPException(status_code=404, detail="Session, Character, or Requesting User not found.")
 
     is_request_from_gm = (session.gm_id == requesting_user.id)
 
-    # For a regular player, check ownership and the 1-character limit
+    # ... (Your existing logic for checking ownership and character limits is correct and remains unchanged)
     if not is_request_from_gm:
         if character.owner_id != requesting_user.id:
             raise HTTPException(status_code=403, detail="Player does not own this character.")
@@ -517,22 +612,24 @@ async def add_character_to_session(session_id: int, request: AddCharacterRequest
         if existing_participant:
             raise HTTPException(status_code=400, detail="Player already has a character in this session.")
         
-    # If the request is from the GM, they must own the character template
     elif is_request_from_gm and character.owner_id != session.gm_id:
          raise HTTPException(status_code=403, detail="GM does not own this character template.")
     
+    # REFACTOR: Use the Pydantic schema to calculate the character's max values.
+    char_schema = CharacterSchema.model_validate(character)
+    
+    # REFACTOR: Create the new participant using the calculated values.
     new_participant = models.SessionCharacter(
         session_id=session_id,
         character_id=request.character_id,
-        # If the GM is adding the character, it's an NPC, so player_id is None.
-        player_id=None if is_request_from_gm else request.player_id,
-        current_prana=character.max_prana,
-        current_tapas=character.max_tapas,
-        current_maya=character.max_maya,
+        # CORRECTED: NPCs added by the GM should be controlled by the GM.
+        player_id=session.gm_id if is_request_from_gm else request.player_id,
+        current_prana=char_schema.max_prana,
+        current_tapas=char_schema.max_tapas,
+        current_maya=char_schema.max_maya,
         x_pos=None,
         y_pos=None
     )
-    # ---------------------------
 
     db.add(new_participant)
     db.commit()
@@ -738,23 +835,31 @@ async def add_npcs_to_session(session_id: int, request: AddNpcsRequest, backgrou
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    # Fetch all requested character templates in one query for efficiency
-    character_templates = db.query(models.Character).filter(models.Character.id.in_(request.character_ids)).all()
+    # REFACTOR: Eagerly load the character templates with their race and class data.
+    # This is essential for our calculations.
+    character_templates = db.query(models.Character).options(
+        joinedload(models.Character.race),
+        joinedload(models.Character.char_class)
+    ).filter(models.Character.id.in_(request.character_ids)).all()
     
-    # Verify the GM owns all of them
+    # Verify the GM owns all of them. This logic is unchanged.
     for char in character_templates:
         if char.owner_id != session.gm_id:
             raise HTTPException(status_code=403, detail=f"GM does not own character template: {char.name}")
 
     new_npcs = []
     for char in character_templates:
+        # REFACTOR: Use our Pydantic schema to calculate the character's max values.
+        char_schema = CharacterSchema.model_validate(char)
+        
+        # REFACTOR: Create the new SessionCharacter using the calculated values from the schema.
         new_npc = models.SessionCharacter(
             session_id=session.id,
             character_id=char.id,
             player_id=session.gm_id,
-            current_prana=char.max_prana,
-            current_tapas=char.max_tapas,
-            current_maya=char.max_maya,
+            current_prana=char_schema.max_prana,
+            current_tapas=char_schema.max_tapas,
+            current_maya=char_schema.max_maya,
             x_pos=None,
             y_pos=None
         )
@@ -764,45 +869,61 @@ async def add_npcs_to_session(session_id: int, request: AddNpcsRequest, backgrou
     db.commit()
 
     background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    # The final returned session will correctly include the newly added NPCs.
     return GameSessionSchema.model_validate(session)
 
 @app.post("/sessions/{session_id}/update_npcs/", response_model=GameSessionSchema)
 async def update_session_npcs(session_id: int, request: UpdateNpcsRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """
+    Synchronizes the NPCs in a session with a provided list of character IDs.
+    """
     session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Get the character IDs of current NPCs in the session
-    current_npc_participants = db.query(models.SessionCharacter).filter(
+    # This logic for identifying current NPCs is correct, but we can make it more robust
+    current_npc_participants = db.query(models.SessionCharacter).join(models.Character).filter(
         models.SessionCharacter.session_id == session_id,
-        models.SessionCharacter.player_id == None
+        models.SessionCharacter.player_id == session.gm_id
     ).all()
     current_npc_ids = {p.character_id for p in current_npc_participants}
     
     requested_npc_ids = set(request.npc_ids)
 
-    # Determine which NPCs to add and remove
+    # This logic for determining which NPCs to add and remove is unchanged.
     ids_to_add = requested_npc_ids - current_npc_ids
     ids_to_remove = current_npc_ids - requested_npc_ids
 
-    # Remove NPCs who are no longer selected
+    # This logic for removing NPCs is also unchanged.
     if ids_to_remove:
         participants_to_remove = [p for p in current_npc_participants if p.character_id in ids_to_remove]
         for p in participants_to_remove:
             db.delete(p)
 
-    # Add new NPCs
+    # REFACTOR: This section is updated to correctly calculate initial resources for new NPCs.
     if ids_to_add:
-        character_templates = db.query(models.Character).filter(models.Character.id.in_(ids_to_add)).all()
+        # Step 1: Eagerly load the character templates with their race and class data.
+        character_templates = db.query(models.Character).options(
+            joinedload(models.Character.race),
+            joinedload(models.Character.char_class)
+        ).filter(models.Character.id.in_(ids_to_add)).all()
+
         for char in character_templates:
-            # Security check: Ensure GM owns the template
+            # Security check remains the same.
             if char.owner_id != session.gm_id:
                 raise HTTPException(status_code=403, detail=f"GM does not own character template: {char.name}")
+
+            # Step 2: Use our Pydantic schema to calculate the character's max values.
+            char_schema = CharacterSchema.model_validate(char)
+            
+            # Step 3: Create the new SessionCharacter using the calculated values.
             new_npc = models.SessionCharacter(
                 session_id=session.id, 
                 character_id=char.id, 
-                player_id=session.gm_id,
-                current_prana=char.max_prana, current_tapas=char.max_tapas, current_maya=char.max_maya
+                player_id=session.gm_id, # NPCs are "owned" by the GM in a session
+                current_prana=char_schema.max_prana, 
+                current_tapas=char_schema.max_tapas, 
+                current_maya=char_schema.max_maya
             )
             db.add(new_npc)
 
