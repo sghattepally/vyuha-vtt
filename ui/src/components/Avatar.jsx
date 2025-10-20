@@ -1,4 +1,4 @@
-// ui/src/components/Avatar.jsx (Definitive Version)
+// ui/src/components/Avatar.jsx (Corrected)
 
 import React, { useState, useRef } from 'react';
 import ReactDOM from 'react-dom';
@@ -25,7 +25,8 @@ const Tooltip = ({ participant, isSelf, isGM, position }) => {
   return ReactDOM.createPortal(
     <div className="avatar-tooltip" style={style}>
       <h4>{character.name}</h4>
-      <p>{character.race} {character.character_class}, Level {character.level}</p>
+      {/* --- FIX IS HERE --- */}
+      <p>{character.race.name} {character.char_class.name}, Level {character.level}</p>
       <p>Status: <span className="status-text">{status}</span></p>
       <hr />
       <div className="tooltip-resources">
@@ -55,8 +56,8 @@ function Avatar({ participant, isSelf, isGM, isDraggable, onAvatarDragStart, dra
   const avatarRef = useRef(null);
   const [tooltipPosition, setTooltipPosition] = useState(null);
 
-  const handleMouseEnter = () => { if (avatarRef.current) { 
-    const rect = avatarRef.current.getBoundingClientRect(); 
+  const handleMouseEnter = () => { if (avatarRef.current) {
+    const rect = avatarRef.current.getBoundingClientRect();
     const tooltipWidth = 240;
     let left = rect.left + rect.width / 2;
       let transform = 'translateX(-50%)'; // Default: center the tooltip
@@ -66,7 +67,7 @@ function Avatar({ participant, isSelf, isGM, isDraggable, onAvatarDragStart, dra
         left = rect.right;
         transform = 'translateX(-100%)'; // Align right edge of tooltip with right edge of avatar
       }
-      
+
       // Check if it's going off the left edge of the screen
       if (left - (tooltipWidth / 2) < 0) {
         left = rect.left;

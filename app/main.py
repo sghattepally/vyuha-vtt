@@ -665,14 +665,23 @@ async def remove_character_from_session(session_id: int, participant_id: int, ba
 
 @app.post("/sessions/{session_id}/begin_combat", response_model=GameSessionSchema)
 async def begin_combat(session_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    session = db.query(models.GameSession).options(
+        joinedload(models.GameSession.participants)
+        .joinedload(models.SessionCharacter.character)  
+        .joinedload(models.Character.race),            
+        joinedload(models.GameSession.participants)
+        .joinedload(models.SessionCharacter.character)  
+        .joinedload(models.Character.char_class)       
+    ).filter(models.GameSession.id == session_id).first()
+
     if not session or session.current_mode != 'staging':
         raise HTTPException(status_code=400, detail="Not in staging.")
 
+    
     initiative_results = []
     for p in session.participants:
-        if p.character: # Safety check
-            dakshata_mod = game_rules.get_attribute_modifier(p.character.dakshata)
+        if p.character:
+            dakshata_mod = get_modifier(CharacterSchema.model_validate(p.character).dakshata)
             roll = random.randint(1, 20)
             total_score = roll + dakshata_mod
             
@@ -686,8 +695,8 @@ async def begin_combat(session_id: int, background_tasks: BackgroundTasks, db: S
             initiative_results.append({
                 "participant_id": p.id,
                 "score": total_score,
-                "dakshata": p.character.dakshata,
-                "participant_name": p.character.name
+                "dakshata": CharacterSchema.model_validate(p.character).dakshata,
+                "participant_name": CharacterSchema.model_validate(p.character).name
             })
             p.status = 'active'
     
@@ -705,8 +714,7 @@ async def begin_combat(session_id: int, background_tasks: BackgroundTasks, db: S
     background_tasks.add_task(manager.broadcast_session_state, session_id, db)
     await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
     
-    return GameSessionSchema.from_orm(session)
-
+    return GameSessionSchema.model_validate(session)
 
 # --- THE GAME ENGINE ---
 # In app/main.py, replace the entire perform_action function with this:
@@ -715,6 +723,7 @@ async def begin_combat(session_id: int, background_tasks: BackgroundTasks, db: S
 async def perform_action(session_id: int, action: GameAction, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
     actor = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == action.actor_id).first()
+    validated_actor_character = CharacterSchema.model_validate(actor.character)
     if not session or not actor or actor.session_id != session_id:
         raise HTTPException(status_code=400, detail="Invalid actor or session")
 
@@ -754,15 +763,15 @@ async def perform_action(session_id: int, action: GameAction, background_tasks: 
             })
         else:
             # The rest of the attack logic only runs if the target is in range.
-            to_hit_mod = game_rules.get_attribute_modifier(getattr(actor.character, ability.to_hit_attribute))
+            to_hit_mod = get_modifier(getattr(validated_actor_character, ability.to_hit_attribute))
             attack_roll = random.randint(1, 20)
             total_attack = attack_roll + to_hit_mod
-            evasion_dc = 10 + game_rules.get_attribute_modifier(target.character.dakshata)
+            evasion_dc = 10 + get_modifier(CharacterSchema.model_validate(target.character).dakshata)
             
             if total_attack >= evasion_dc:
                 damage_mod = 0
                 if ability.damage_attribute:
-                    damage_mod = game_rules.get_attribute_modifier(getattr(actor.character, ability.damage_attribute))
+                    damage_mod = get_modifier(getattr(validated_actor_character, ability.damage_attribute))
                 
                 num, dice = map(int, ability.damage_dice.split('d'))
                 damage_roll = sum(random.randint(1, dice) for _ in range(num))

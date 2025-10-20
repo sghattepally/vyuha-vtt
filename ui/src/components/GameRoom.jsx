@@ -10,12 +10,13 @@ import CharacterCard from './CharacterCard';
 import Token from './Token';
 import NpcManager from './NpcManager';
 import PartyPanel from './PartyPanel';
+import AttributeSkillPanel from './AttributeSkillPanel';
 
 const initialLayout = [
-  { i: 'party', x: 0, y: 0, w: 6, h: 4, minW: 3, minH: 3 },
+  { i: 'party', x: 3, y: 0, w: 3, h: 4, minW: 3, minH: 3 },
   { i: 'log', x: 6, y: 0, w: 5, h: 4, minW: 2, minH: 3 },
   { i: 'main', x: 3, y: 4, w: 8, h: 7, minW: 4, minH: 5 },
-  { i: 'context', x: 0, y: 4, w: 3, h: 7, minW: 2, minH: 5 },
+  { i: 'context', x: 0, y: 0, w: 3, h: 11, minW: 2, minH: 5 },
 ];
 const COLLAPSED_HEIGHT = 1;
 
@@ -121,7 +122,9 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
     ? sessionData.participants.find(p => p.id === sessionData.turn_order[sessionData.current_turn_index])
     : null;
   const isMyTurn = activeParticipant && (activeParticipant.player_id === currentUser.id || effectiveIsGM);
+  const currentUserParticipant = sessionData.participants.find(p => p.player_id === currentUser.id);
 
+  const displayCharacter = currentUserParticipant?.character;
   const handleGridClick = (x, y) => {
     if (selectedAction.type === 'MOVE' && activeParticipant && isMyTurn) {
       handlePerformAction({ actor_id: activeParticipant.id, action_type: 'MOVE', new_x: x, new_y: y });
@@ -280,8 +283,15 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
                     onEndTurn={handleEndTurn} />
                 </>
               ) : (
+                currentUserParticipant && displayCharacter ? (
+                <AttributeSkillPanel 
+                    character={displayCharacter}
+                    raceDetails={displayCharacter.race}
+                    classDetails={displayCharacter.char_class}
+                />
+            ) : (
                 <div className="placeholder-text">Character details will appear here.</div>
-              )}
+              ))}
             </Panel>
           </div>
         </GridLayout>
