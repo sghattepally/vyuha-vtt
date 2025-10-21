@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import json, string
 import asyncio
 import datetime
-
+import math
 
 # ==================================
 # 2. Database Setup
@@ -175,6 +175,27 @@ class GameSessionCreate(pydantic.BaseModel):
     gm_access_code: str
     character_ids: List[int] = []
 
+class SkillCheckRequest(pydantic.BaseModel):
+    participant_ids: List[int]
+    check_type: str
+    dc: int
+    description: str
+
+class SkillCheckRoll(pydantic.BaseModel):
+    skill_check_id: int # Renamed from pending_check_id for clarity
+    use_advantage: bool = False
+
+class SkillCheckSchema(pydantic.BaseModel):
+    id: int
+    participant_id: int
+    check_type: str
+    dc: int
+    description: str
+    status: str
+
+    class Config:
+        from_attributes = True
+
 class GameSessionSchema(pydantic.BaseModel):
     id: int
     gm_id: int
@@ -185,6 +206,7 @@ class GameSessionSchema(pydantic.BaseModel):
     participants: List[SessionCharacterSchema] = []
     turn_order: List[int] = []
     current_turn_index: int = 0
+    skill_checks: List[SkillCheckSchema] = []
 
     class Config:
         from_attributes = True
@@ -239,6 +261,8 @@ class AddNpcsRequest(pydantic.BaseModel):
 
 class UpdateNpcsRequest(pydantic.BaseModel):
     npc_ids: List[int]
+
+
 
 # ==================================
 # 4. The FastAPI App Instance & CORS
@@ -947,3 +971,145 @@ def get_session_log(session_id: int, db: Session = Depends(get_db)):
     """Fetches all log entries for a session, ordered by timestamp."""
     log_entries = db.query(models.GameLogEntry).filter(models.GameLogEntry.session_id == session_id).order_by(models.GameLogEntry.timestamp.asc()).all()
     return log_entries
+
+@app.post("/sessions/{session_id}/skill_check/request")
+async def request_skill_check(session_id: int, request: SkillCheckRequest, db: Session = Depends(get_db)):
+    """
+    Endpoint for a GM to request a skill check from one or more participants.
+    This creates the pending check records in the database.
+    """
+    gm_actor_name = "Game Master" # Or fetch GM character name if you have one
+
+    targets = db.query(models.SessionCharacter).options(
+        joinedload(models.SessionCharacter.character)
+    ).filter(
+        models.SessionCharacter.id.in_(request.participant_ids),
+        models.SessionCharacter.session_id == session_id
+    ).all()
+
+    target_names = [p.character.name for p in targets if p.character]
+    if not target_names:
+        raise HTTPException(status_code=400, detail="No valid participants found for this skill check.")
+
+    # Now, log a single, detailed event that lists all targeted players.
+    log_event(db, session_id, 'skill_check_initiated', details={
+        "actor_name": gm_actor_name,
+        "description": request.description,
+        "check_type": request.check_type.capitalize(),
+        "dc": request.dc,
+        "target_names": target_names  # This new field lists the players
+    })
+    # --- END OF CHANGE ---
+
+    # We can reuse the 'targets' list to create the individual check for each participant.
+    for participant in targets:
+        new_check = models.SkillCheck(
+            session_id=session_id,
+            participant_id=participant.id,
+            check_type=request.check_type,
+            dc=request.dc,
+            description=request.description,
+            status="pending"
+        )
+        db.add(new_check)
+
+    db.commit()
+
+    # Broadcast the new state to all clients.
+    await manager.broadcast_session_state(session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+
+    return {"message": f"Skill check request sent to {len(target_names)} participants."}
+
+
+@app.post("/sessions/{session_id}/skill_check/roll")
+async def roll_skill_check(session_id: int, request: SkillCheckRoll, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """
+    Performs a skill check. All modifier logic is self-contained in this function.
+    """
+    skill_check = db.query(models.SkillCheck).options(
+        joinedload(models.SkillCheck.participant).
+        joinedload(models.SessionCharacter.character).
+        joinedload(models.Character.race),
+        joinedload(models.SkillCheck.participant).
+        joinedload(models.SessionCharacter.character).
+        joinedload(models.Character.char_class)
+    ).filter(models.SkillCheck.id == request.skill_check_id).first()
+
+    if not skill_check or skill_check.session_id != session_id or skill_check.status != 'pending':
+        raise HTTPException(status_code=404, detail="Pending skill check not found.")
+
+    participant = skill_check.participant
+    character = participant.character
+    if not character:
+        raise HTTPException(status_code=400, detail="Participant has no character.")
+
+    validated_character = CharacterSchema.model_validate(character)
+    modifier = 0
+    check_type = skill_check.check_type
+
+    # 2. Use game_rules ONLY to get the list of derived skills.
+    if check_type in game_rules.DERIVED_SKILLS:
+        attr1_name, attr2_name = game_rules.DERIVED_SKILLS[check_type]
+        score1 = getattr(validated_character, attr1_name)
+        score2 = getattr(validated_character, attr2_name)
+        mod1 = get_modifier(score1)
+        mod2 = get_modifier(score2)
+        modifier = math.floor((mod1 + mod2) / 2)
+    else:
+        score = getattr(validated_character, check_type)
+        modifier = get_modifier(score)
+        
+
+    roll1 = random.randint(1, 20)
+    final_roll = roll1
+    advantage_used = False
+
+    if request.use_advantage:
+        primary_attribute = check_type
+        if check_type in game_rules.DERIVED_SKILLS:
+            # For derived skills, the resource is typically tied to the spiritual/willpower attribute
+            primary_attribute = game_rules.DERIVED_SKILLS[check_type][1]
+        
+        resource_to_use = game_rules.ATTRIBUTE_TO_RESOURCE.get(primary_attribute, "tapas") # Default to Tapas
+
+        if resource_to_use == "tapas" and participant.current_tapas > 0:
+            participant.current_tapas -= 1
+            advantage_used = True
+        elif resource_to_use == "maya" and participant.current_maya > 0:
+            participant.current_maya -= 1
+            advantage_used = True
+        
+        if advantage_used:
+            roll2 = random.randint(1, 20)
+            final_roll = max(roll1, roll2)
+
+    total_score = final_roll + modifier
+    success = total_score >= skill_check.dc
+    skill_check.status = 'completed'
+    db.add(skill_check)
+    
+    # FIX: Add background task for broadcasting state
+    # This was missing in the original function.
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+
+    log_event(db, session_id, 'skill_check_result', actor_id=participant.id, details={
+        "character_name": character.name, "check_type": check_type.capitalize(),
+        "roll": final_roll, "modifier": modifier, "total": total_score, "dc": skill_check.dc,
+        "success": success, "advantage_used": advantage_used,
+        "roll_breakdown": f"{roll1}" + (f", {roll2}" if advantage_used else "")
+    })
+    
+    db.commit()
+
+    # The broadcast for state is now in a background task, but we still need the log entry notification.
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+
+    return {
+        "success": success,
+        "total": total_score,
+        "roll": final_roll,
+        "modifier": modifier,
+        "roll_breakdown": f"{roll1}" + (f", {roll2}" if advantage_used else ""),
+        "advantage_used": advantage_used
+    }

@@ -146,6 +146,7 @@ class GameSession(Base):
     access_code = Column(String, unique=True, index=True, nullable=True)
     participants = relationship("SessionCharacter", back_populates="session")
     log_entries = relationship("GameLogEntry", back_populates="session", cascade="all, delete-orphan")
+    skill_checks = relationship("SkillCheck", back_populates="session", cascade="all, delete-orphan")
 
 class GameLogEntry(Base):
     __tablename__ = "game_log_entries"
@@ -157,3 +158,18 @@ class GameLogEntry(Base):
     target_id = Column(Integer, ForeignKey("session_characters.id"), nullable=True)
     details = Column(JSON, nullable=True) 
     session = relationship("GameSession", back_populates="log_entries")
+
+class SkillCheck(Base):
+    __tablename__ = "skill_checks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=False)
+    participant_id = Column(Integer, ForeignKey("session_characters.id"), nullable=False)
+    
+    check_type = Column(String, nullable=False) # e.g., "dakshata", "moha"
+    dc = Column(Integer, nullable=False)
+    description = Column(String, nullable=False)
+    status = Column(String, default="pending") # Can be 'pending' -> 'completed'
+
+    participant = relationship("SessionCharacter")
+    session = relationship("GameSession")

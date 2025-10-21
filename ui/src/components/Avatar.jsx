@@ -2,19 +2,11 @@
 
 import React, { useState, useRef } from 'react';
 import ReactDOM from 'react-dom';
+import ResourceDots from './ResourceDots';
 
 const getModifier = (score) => {
   const modifier = Math.floor((score - 10) / 2);
   return modifier >= 0 ? `+${modifier}` : `${modifier}`;
-};
-
-const ResourceBar = ({ current, max, color }) => {
-  const percentage = max > 0 ? (current / max) * 100 : 0;
-  return (
-    <div className="resource-bar-background">
-      <div className="resource-bar-foreground" style={{ backgroundColor: color, width: `${percentage}%` }}></div>
-    </div>
-  );
 };
 
 const Tooltip = ({ participant, isSelf, isGM, position }) => {
@@ -101,10 +93,29 @@ function Avatar({ participant, isSelf, isGM, isDraggable, onAvatarDragStart, dra
       <div className="avatar-circle">{initials}{status !== 'active' && <div className="status-effect-icon">{status.charAt(0).toUpperCase()}</div>}</div>
       <div className="avatar-info">
         <span className="avatar-name">{character.name}</span>
-        <div className="resource-bars">
-          <ResourceBar current={current_prana} max={character.max_prana} color="#4caf50" />
-          <ResourceBar current={current_tapas} max={character.max_tapas} color="#ff9800" />
-          <ResourceBar current={current_maya} max={character.max_maya} color="#2196f3" />
+        <div className="resource-display">
+          {/* Prāṇa can remain a bar for now, or you can convert it too if you like */}
+          <div
+            className="prana-bar"
+            title={`Prāṇa: ${current_prana} / ${character.max_prana}`}
+          >
+            <div
+              className="prana-bar-fill"
+              style={{ width: `${(current_prana / character.max_prana) * 100}%` }}
+            ></div>
+          </div>
+          <ResourceDots
+            current={current_tapas}
+            max={character.max_tapas}
+            color="#ff9800"
+            resourceName="Tapas"
+          />
+          <ResourceDots
+            current={current_maya}
+            max={character.max_maya}
+            color="#2196f3"
+            resourceName="Māyā"
+          />
         </div>
       </div>
       <Tooltip participant={participant} isSelf={isSelf} isGM={isGM} position={tooltipPosition} />

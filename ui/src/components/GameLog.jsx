@@ -52,6 +52,29 @@ const formatLogEntry = (entry, participants) => {
                     {character_name} rolls <span className="log-dice">({initiativeRoll})</span> + Dakṣatā Mod ({initiativeModifier}) for a total of <span className="log-total">{initiativeTotal}</span> for initiative.
                 </span>
             );
+        case 'skill_check_initiated':
+        return (
+          <span>
+            <strong>{entry.details.actor_name}</strong> requests a <strong>{entry.details.check_type}</strong> check (DC {entry.details.dc}) for{' '}
+            <strong>{(entry.details.target_names || []).join(', ')}</strong>: <em>"{entry.details.description}"</em>
+          </span>
+        );
+        case 'skill_check_result':
+        // Destructure all the needed properties from entry.details
+        const { character_name : char_name, check_type, roll : skill_roll, modifier: skill_mod, total : skill_total, dc: skill_dc, success, advantage_used, roll_breakdown } = entry.details;
+        const resultClass = success ? 'log-success' : 'log-failure';
+        const advantageText = advantage_used ? ` (Advantage: ${roll_breakdown})` : '';
+        const tooltipText = `Roll: ${skill_roll}${advantageText} + Mod: ${skill_mod}`;
+        
+        return (
+          <span>
+            <strong>{char_name}</strong> attempts a <strong>{check_type}</strong> check:{' '}
+            <strong className="roll-tooltip" title={tooltipText}>
+              Total {skill_total}
+            </strong>
+            {' '}(DC {skill_dc}) - <strong className={resultClass}>{success ? 'Success!' : 'Failure.'}</strong>
+          </span>
+        );
         case 'turn_order_set':
             return <span className="log-system">--- The turn order is set: {entry.details.order}. ---</span>;
         default:

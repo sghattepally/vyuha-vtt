@@ -6,6 +6,8 @@ import CombatGrid from './CombatGrid';
 import InitiativeTracker from './InitiativeTracker';
 import ActionPanel from './ActionPanel';
 import GameLog from './GameLog';
+import SkillCheckModal from './SkillCheckModal';
+import SkillCheckPrompt from './SkillCheckPrompt';
 import CharacterCard from './CharacterCard';
 import Token from './Token';
 import NpcManager from './NpcManager';
@@ -19,12 +21,14 @@ const initialLayout = [
   { i: 'context', x: 0, y: 0, w: 3, h: 11, minW: 2, minH: 5 },
 ];
 const COLLAPSED_HEIGHT = 1;
-
 function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef , newLogTrigger }) {
   const [selectedAction, setSelectedAction] = useState({ type: 'none', ability: null });
   const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
   const [turnActions, setTurnActions] = useState({ hasAttacked: false });
   const [isNpcManagerOpen, setIsNpcManagerOpen] = useState(false);
+  const [isSkillCheckModalOpen, setIsSkillCheckModalOpen] = useState(false);
+  const [acknowledgedCheckId, setAcknowledgedCheckId] = useState(null);
+  
   const [layout, setLayout] = useState(initialLayout);
   const originalLayouts = useRef({});
   const effectiveIsGM = isGM && isGmOverride;
@@ -77,6 +81,18 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
       console.error("Failed to prepare for combat", err);
     }
   };
+
+
+  const handleRequestSkillCheck = async (payload) => {
+    try {
+      await axios.post(`http://localhost:8000/sessions/${sessionData.id}/skill_check/request`, payload);
+      setIsSkillCheckModalOpen(false); // Close modal on successful request
+    } catch (error) {
+      console.error("Failed to request skill check:", error.response?.data?.detail || error.message);
+      alert('Failed to request skill check. See console for details.');
+    }
+  };
+
 
   const handleTokenMove = async (participantId, x, y) => {
     if (!effectiveIsGM) return;
@@ -135,6 +151,18 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
       handlePerformAction({ actor_id: activeParticipant.id, action_type: 'ATTACK', target_id: targetId, ability_id: selectedAction.ability.id });
     }
   };
+  const latestCheckForPlayer = sessionData.skill_checks
+    ?.filter(check => check.participant_id === currentUserParticipant?.id)
+    .sort((a, b) => b.id - a.id)[0]; // Get the most recent one
+
+  
+  const isPromptVisible = latestCheckForPlayer && latestCheckForPlayer.id !== acknowledgedCheckId;
+  
+  const handleAcknowledgeCheck = () => {
+    if (latestCheckForPlayer) {
+      setAcknowledgedCheckId(latestCheckForPlayer.id);
+    }
+  };
 
   useEffect(() => {
     setActiveCharacterAbilities([]);
@@ -157,6 +185,14 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
 
   return (
     <>
+    {isSkillCheckModalOpen && (
+        <SkillCheckModal
+          sessionData={sessionData}
+          participants={sessionData.participants}
+          onClose={() => setIsSkillCheckModalOpen(false)}
+          onSkillCheckRequested={handleRequestSkillCheck}
+        />
+      )}
       {isNpcManagerOpen && (
         <NpcManager
           gmId={currentUser.id}
@@ -176,6 +212,19 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
           draggableHandle=".panel-header"
           draggableCancel=".panel-collapse-button"
         >
+    {isPromptVisible && (
+        <div key="skill_check" data-grid={{x: 0, y: 0, w: 3, h: 4}}>
+          <h3 style={{ textAlign: 'center' }}>Skill Check</h3>
+            <div title="Skill Check" canCollapse={false}>
+                <SkillCheckPrompt
+                  sessionData={sessionData}
+                  check={latestCheckForPlayer}
+                  onAcknowledge={handleAcknowledgeCheck}
+                  participant={currentUserParticipant}
+                />
+            </div>
+        </div>
+    )}
           <div key="party" className="allow-overflow">
             <Panel title="Party" onCollapse={() => togglePanelCollapse('party')}
               isCollapsed={layout.find(p => p.i === 'party')?.h === COLLAPSED_HEIGHT}>
@@ -257,6 +306,7 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
                     <>
                       <button onClick={handlePrepareForCombat}>Prepare for Combat</button>
                       <button onClick={() => setIsNpcManagerOpen(true)}>Manage NPCs</button>
+                      <button onClick={() => setIsSkillCheckModalOpen(true)}>Request Skill Check</button>
                     </>
                   )}
                   {sessionData.current_mode === 'staging' && (
