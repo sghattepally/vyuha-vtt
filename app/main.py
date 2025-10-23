@@ -87,7 +87,26 @@ class CharClassSchema(pydantic.BaseModel):
     class Config:
         from_attributes = True
 
-# --- Character Schemas ---
+class ItemSchema(pydantic.BaseModel):
+    id: int
+    puranic_name: str
+    english_name: str | None = None
+    description: str | None = None
+    item_type: str
+    is_stackable: bool
+
+    class Config:
+        from_attributes = True # Pydantic v2 syntax
+
+class CharacterInventorySchema(pydantic.BaseModel):
+    id: int
+    quantity: int
+    is_equipped: bool
+    item: ItemSchema # This is the nested item data
+
+    class Config:
+        from_attributes = True
+
 class CharacterAbilityCreate(pydantic.BaseModel):
     ability_id: int
 
@@ -105,6 +124,8 @@ class CharacterSchema(pydantic.BaseModel):
     owner_id: int
     level: int
     movement_speed: int
+    currency: int = 0 
+    inventory: List[CharacterInventorySchema] = [] 
     @pydantic.computed_field
     def bala(self) -> int:
         return self.char_class.base_bala + self.race.bala_mod
@@ -262,7 +283,14 @@ class AddNpcsRequest(pydantic.BaseModel):
 class UpdateNpcsRequest(pydantic.BaseModel):
     npc_ids: List[int]
 
+class GiveItemRequest(pydantic.BaseModel):
+    character_id: int
+    item_id: int
+    quantity: int = 1
 
+class GiveItemPlayerRequest(pydantic.BaseModel):
+    target_character_id: int
+    quantity: int
 
 # ==================================
 # 4. The FastAPI App Instance & CORS
@@ -470,28 +498,34 @@ def create_character(character_input: CharacterCreate, db: Session = Depends(get
             db.add(new_link)
         
         db.commit()
+    char_class = db.query(models.Char_Class).filter(models.Char_Class.id == new_character.char_class_id).first()
+    if not char_class:
+        # This is a fallback in case the class ID is invalid
+        return new_character
+
+    # 2. Look up the default equipment list for this class
+    default_items = game_rules.DEFAULT_EQUIPMENT_BY_CLASS.get(char_class.name)
+
+    if default_items:
+        # 3. Loop through the list and add each item to the character's inventory
+        for item_name, quantity in default_items:
+            # Find the master item in the 'items' table
+            item_to_add = db.query(models.Item).filter(models.Item.puranic_name == item_name).first()
+            if item_to_add:
+                # Create the new inventory entry
+                new_inventory_item = models.CharacterInventory(
+                    character_id=new_character.id,
+                    item_id=item_to_add.id,
+                    quantity=quantity,
+                    is_equipped=False # Items are not equipped by default
+                )
+                db.add(new_inventory_item)
+    
+        db.commit() 
+        db.refresh(new_character)
 
     return new_character
 
-    # Step 3: Assign default abilities using the list from the class's DB record.
-    if db_class.default_abilities:
-        abilities_to_learn = db.query(models.Ability).filter(
-            models.Ability.name.in_(db_class.default_abilities)
-        ).all()
-        
-        for ability in abilities_to_learn:
-            # Use the existing CharacterAbility junction object to create the link.
-            new_link = models.CharacterAbility(
-                character_id=new_character.id,
-                ability_id=ability.id
-            )
-            db.add(new_link)
-        
-        db.commit()
-        print(f"Assigned default abilities to '{new_character.name}'")
-
-    # Step 4: Return the character. The Pydantic schema will handle all stat calculations.
-    return new_character
 
 @app.get("/users/{user_id}/characters", response_model=List[CharacterSchema])
 def get_user_characters(user_id: int, db: Session = Depends(get_db)):
@@ -525,6 +559,23 @@ def get_character_abilities(character_id: int, db: Session = Depends(get_db)):
             abilities.append(ability)
             
     return abilities
+
+@app.get("/character/{character_id}/inventory", response_model=List[CharacterInventorySchema])
+async def get_character_inventory(character_id: int, db: Session = Depends(get_db)):
+    """
+    Fetches the complete inventory for a specific character.
+    """
+    # Query for all inventory entries belonging to the character.
+    # `joinedload` tells SQLAlchemy to also fetch the related item data in a single, efficient query.
+    inventory_items = db.query(models.CharacterInventory).options(
+        joinedload(models.CharacterInventory.item)
+    ).filter(models.CharacterInventory.character_id == character_id).all()
+    
+    if not inventory_items:
+        # It's not an error to have an empty inventory, just return an empty list.
+        return []
+        
+    return inventory_items
 
 # --- SESSION ENDPOINTS ---
 @app.post("/sessions", response_model=GameSessionSchema)
@@ -854,6 +905,21 @@ async def end_combat(session_id: int, background_tasks: BackgroundTasks, db: Ses
     if session.current_mode != 'combat':
         raise HTTPException(status_code=400, detail="Session is not in combat.")
 
+    for p in session.participants:
+        p.initiative = None
+        p.x_pos = None
+        p.y_pos = None
+        # We can also reset status if needed, e.g., from 'unconscious' to 'active'
+        # if p.current_prana > 0 and p.status != 'active':
+        #     p.status = 'active'
+        db.add(p)
+
+    # Reset the session's combat-specific fields
+    session.current_mode = 'exploration'
+    session.turn_order = []
+    session.current_turn_index = 0
+    db.add(session)
+    
     session.current_mode = 'exploration'
     log_event(db, session_id, 'mode_change', details={"new_mode": "exploration"})
     db.commit()
@@ -1113,3 +1179,261 @@ async def roll_skill_check(session_id: int, request: SkillCheckRoll, background_
         "roll_breakdown": f"{roll1}" + (f", {roll2}" if advantage_used else ""),
         "advantage_used": advantage_used
     }
+
+@app.post("/gm/give-item")
+async def gm_give_item(request: GiveItemRequest, db: Session = Depends(get_db)):
+    """
+    Allows a GM to give a specified quantity of an item to a character.
+    If the character already has the item and it's stackable, it updates the quantity.
+    Otherwise, it creates a new inventory entry.
+    """
+    # Find the character and the master item entry
+    character = db.query(models.Character).filter(models.Character.id == request.character_id).first()
+    item = db.query(models.Item).filter(models.Item.id == request.item_id).first()
+
+    if not character or not item:
+        raise HTTPException(status_code=404, detail="Character or Item not found.")
+
+    # Check if the character already has this item
+    inventory_entry = db.query(models.CharacterInventory).filter(
+        models.CharacterInventory.character_id == request.character_id,
+        models.CharacterInventory.item_id == request.item_id
+    ).first()
+
+    log_details = {
+        "gm_action": "Gave Item",
+        "character_name": character.name,
+        "item_name": item.puranic_name,
+        "quantity": request.quantity
+    }
+
+    if inventory_entry and item.is_stackable:
+        # If the item exists and is stackable, just increase the quantity
+        inventory_entry.quantity += request.quantity
+        db.add(inventory_entry)
+    else:
+        # If the item is new or not stackable, create a new entry
+        new_inventory_item = models.CharacterInventory(
+            character_id=request.character_id,
+            item_id=request.item_id,
+            quantity=request.quantity,
+            is_equipped=False # Items are never equipped by default
+        )
+        db.add(new_inventory_item)
+
+    db.commit()
+
+    # Find the session this character is in to broadcast an update
+    session_character = db.query(models.SessionCharacter).filter(
+        models.SessionCharacter.character_id == request.character_id
+    ).first()
+
+    if session_character:
+        log_event(db, session_character.session_id, 'gm_give_item', details=log_details)
+        await manager.broadcast_session_state(session_character.session_id, db)
+        await manager.broadcast_json(session_character.session_id, json.dumps({"type": "new_log_entry"}))
+
+    return {"message": f"Successfully gave {request.quantity} of {item.puranic_name} to {character.name}."}
+
+@app.get("/items", response_model=List[ItemSchema])
+async def get_all_items(db: Session = Depends(get_db)):
+    """
+    Fetches the master list of all items available in the game.
+    """
+    items = db.query(models.Item).order_by(models.Item.puranic_name).all()
+    return items
+
+@app.post("/character/{character_id}/inventory/{inventory_id}/toggle-equip")
+async def toggle_equip_item(character_id: int, inventory_id: int, db: Session = Depends(get_db)):
+    """
+    Toggles the equipped status of an inventory item.
+    Enforces game rules, such as unequipping other items of the same type.
+    """
+    # Find the specific inventory item the player is trying to equip/unequip
+    target_inventory_item = db.query(models.CharacterInventory).options(
+        joinedload(models.CharacterInventory.item)
+    ).filter(
+        models.CharacterInventory.id == inventory_id,
+        models.CharacterInventory.character_id == character_id
+    ).first()
+
+    if not target_inventory_item:
+        raise HTTPException(status_code=404, detail="Inventory item not found for this character.")
+
+    # Determine if we are equipping or unequipping
+    is_equipping = not target_inventory_item.is_equipped
+
+    if is_equipping:
+        # --- Rule Enforcement: Unequip other items of the same type ---
+        item_type_to_equip = target_inventory_item.item.item_type
+        
+        # We only enforce this for single-slot types like weapons and armor
+        if item_type_to_equip in [models.ItemType.WEAPON, models.ItemType.ARMOR]:
+            # Find any other currently equipped items of the same type
+            currently_equipped = db.query(models.CharacterInventory).options(
+                joinedload(models.CharacterInventory.item)
+            ).filter(
+                models.CharacterInventory.character_id == character_id,
+                models.CharacterInventory.is_equipped == True
+            ).all()
+
+            for equipped_item in currently_equipped:
+                if equipped_item.item.item_type == item_type_to_equip:
+                    equipped_item.is_equipped = False
+                    db.add(equipped_item)
+
+    # Toggle the state of the target item
+    target_inventory_item.is_equipped = is_equipping
+    db.add(target_inventory_item)
+    db.commit()
+
+    # Find the session this character is in to broadcast the update
+    session_character = db.query(models.SessionCharacter).filter(
+        models.SessionCharacter.character_id == character_id
+    ).first()
+
+    if session_character:
+        log_event(db, session_character.session_id, 'item_equip', details={
+            "character_name": target_inventory_item.character.name,
+            "item_name": target_inventory_item.item.puranic_name,
+            "equipped": is_equipping
+        })
+        await manager.broadcast_session_state(session_character.session_id, db)
+        await manager.broadcast_json(session_character.session_id, json.dumps({"type": "new_log_entry"}))
+
+    return {"message": f"Item state toggled for {target_inventory_item.item.puranic_name}."}
+
+@app.delete("/inventory/{inventory_id}/destroy")
+async def destroy_inventory_item(inventory_id: int, db: Session = Depends(get_db)):
+    # 1. Eagerly load all relationships to get the data upfront
+    inventory_item = db.query(models.CharacterInventory).options(
+        joinedload(models.CharacterInventory.character),
+        joinedload(models.CharacterInventory.item)
+    ).filter(models.CharacterInventory.id == inventory_id).first()
+
+    if not inventory_item:
+        raise HTTPException(status_code=404, detail="Inventory item not found.")
+    
+    # 2. Store all necessary information for the log BEFORE changing the database
+    character_id = inventory_item.character_id
+    character_name = inventory_item.character.name
+    item_name = inventory_item.item.puranic_name
+    
+    # 3. Now, perform the database deletion
+    db.delete(inventory_item)
+    db.commit()
+
+    # Broadcast update to the relevant session
+    session_character = db.query(models.SessionCharacter).filter(models.SessionCharacter.character_id == character_id).first()
+    if session_character:
+        # 4. Use the safe, pre-stored variables for the log event
+        log_event(db, session_character.session_id, 'item_destroy', details={
+            "character_name": character_name,
+            "item_name": item_name
+        })
+        # The broadcast function does not need the 'db' argument
+        await manager.broadcast_session_state(session_character.session_id, db)
+        await manager.broadcast_json(session_character.session_id, json.dumps({"type": "new_log_entry"}))
+        
+    return {"message": "Item destroyed."}
+
+@app.post("/inventory/{inventory_id}/give")
+async def give_inventory_item(inventory_id: int, request: GiveItemPlayerRequest, db: Session = Depends(get_db)):
+    # Eagerly load relationships to have all data available upfront
+    source_item = db.query(models.CharacterInventory).options(
+        joinedload(models.CharacterInventory.character),
+        joinedload(models.CharacterInventory.item)
+    ).filter(models.CharacterInventory.id == inventory_id).first()
+
+    if not source_item:
+        raise HTTPException(status_code=404, detail="Source item not found.")
+    if request.quantity <= 0 or request.quantity > source_item.quantity:
+        raise HTTPException(status_code=400, detail="Invalid quantity specified.")
+
+    target_character = db.query(models.Character).filter(models.Character.id == request.target_character_id).first()
+    if not target_character:
+        raise HTTPException(status_code=404, detail="Target character not found.")
+
+    # --- Store all data for the log BEFORE making database changes ---
+    source_character_id = source_item.character_id
+    giver_name = source_item.character.name
+    receiver_name = target_character.name
+    item_name = source_item.item.puranic_name
+    
+    # --- START OF NEW LOGIC ---
+    # Check if the target already has a stack of this item
+    target_existing_item = db.query(models.CharacterInventory).filter(
+        models.CharacterInventory.character_id == request.target_character_id,
+        models.CharacterInventory.item_id == source_item.item_id
+    ).first()
+
+    if target_existing_item and source_item.item.is_stackable:
+        # Add to the target's existing stack
+        target_existing_item.quantity += request.quantity
+        db.add(target_existing_item)
+    else:
+        # Create a new inventory entry for the target
+        new_inventory_item = models.CharacterInventory(
+            character_id=request.target_character_id,
+            item_id=source_item.item_id,
+            quantity=request.quantity,
+            is_equipped=False
+        )
+        db.add(new_inventory_item)
+
+    # Decrement the source stack
+    source_item.quantity -= request.quantity
+    if source_item.quantity <= 0:
+        # If the source stack is empty, delete it
+        db.delete(source_item)
+    else:
+        db.add(source_item)
+    # --- END OF NEW LOGIC ---
+    
+    db.commit()
+
+    session_character = db.query(models.SessionCharacter).filter(models.SessionCharacter.character_id == source_character_id).first()
+    if session_character:
+        log_event(db, session_character.session_id, 'item_give', details={
+            "giver_name": giver_name,
+            "receiver_name": receiver_name,
+            "item_name": item_name,
+            "quantity": request.quantity # Use the requested quantity for the log
+        })
+        await manager.broadcast_session_state(session_character.session_id, db)
+        await manager.broadcast_json(session_character.session_id, json.dumps({"type": "new_log_entry"}))
+
+    return {"message": "Item transferred."}
+
+# --- NEW: Endpoint to Use/Consume an Item ---
+@app.post("/inventory/{inventory_id}/use")
+async def use_inventory_item(inventory_id: int, db: Session = Depends(get_db)):
+    inventory_item = db.query(models.CharacterInventory).options(joinedload(models.CharacterInventory.item)).filter(models.CharacterInventory.id == inventory_id).first()
+    if not inventory_item:
+        raise HTTPException(status_code=404, detail="Item not found.")
+
+    # Decrement quantity
+    inventory_item.quantity -= 1
+    
+    log_details = {
+        "action": "Used Item",
+        "character_name": inventory_item.character.name,
+        "item_name": inventory_item.item.puranic_name
+    }
+
+    if inventory_item.quantity <= 0:
+        db.delete(inventory_item)
+    else:
+        db.add(inventory_item)
+    
+    db.commit()
+
+    # We can add logic here later to trigger the item's actual effect (e.g., healing)
+    # For now, we just log that it was used.
+    session_character = db.query(models.SessionCharacter).filter(models.SessionCharacter.character_id == inventory_item.character_id).first()
+    if session_character:
+        log_event(db, session_character.session_id, 'item_use', details=log_details)
+        await manager.broadcast_session_state(session_character.session_id, db)
+        await manager.broadcast_json(session_character.session_id, json.dumps({"type": "new_log_entry"}))
+
+    return {"message": f"{inventory_item.item.puranic_name} was used."}

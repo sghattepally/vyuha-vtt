@@ -8,11 +8,14 @@ import ActionPanel from './ActionPanel';
 import GameLog from './GameLog';
 import SkillCheckModal from './SkillCheckModal';
 import SkillCheckPrompt from './SkillCheckPrompt';
+import CharacterSheet from './CharacterSheet';
+import InventoryPanel from './InventoryPanel';
 import CharacterCard from './CharacterCard';
 import Token from './Token';
 import NpcManager from './NpcManager';
 import PartyPanel from './PartyPanel';
 import AttributeSkillPanel from './AttributeSkillPanel';
+import GiveItemModal from './GiveItemModal';
 
 const initialLayout = [
   { i: 'party', x: 3, y: 0, w: 3, h: 4, minW: 3, minH: 3 },
@@ -27,7 +30,15 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
   const [turnActions, setTurnActions] = useState({ hasAttacked: false });
   const [isNpcManagerOpen, setIsNpcManagerOpen] = useState(false);
   const [isSkillCheckModalOpen, setIsSkillCheckModalOpen] = useState(false);
-  const [acknowledgedCheckId, setAcknowledgedCheckId] = useState(null);
+  const [isGiveItemModalOpen, setIsGiveItemModalOpen] = useState(false);
+  const [acknowledgedCheckId, setAcknowledgedCheckId] = useState(() => {
+    const saved = localStorage.getItem('acknowledgedChecks');
+    return saved ? JSON.parse(saved) : [];
+  });
+  useEffect(() => {
+    localStorage.setItem('acknowledgedChecks', JSON.stringify(acknowledgedCheckId));
+  }, [acknowledgedCheckId]);
+  const [mainPanelTab, setMainPanelTab] = useState('world');
   
   const [layout, setLayout] = useState(initialLayout);
   const originalLayouts = useRef({});
@@ -35,8 +46,72 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
   const handleLayoutChange = (newLayout) => {
     setLayout(newLayout);
   };
+  const mainPanelTabs = [
+    { key: 'world', label: 'World' },
+    { key: 'inventory', label: 'Inventory'},
+    { key: 'sheet', label: 'Character Sheet' },
+    { key: 'journal', label: 'Journal' },
+  ];
 
+  const renderMainPanelContent = () => {
+    switch (mainPanelTab) {
+      case 'inventory':
+        return <InventoryPanel character={displayCharacter} participants={sessionData.participants}/>;
 
+      case 'sheet':
+        return <CharacterSheet character={displayCharacter} />;
+
+      case 'journal':
+        return <div className="placeholder-text">Journal and notes will appear here.</div>;
+
+      case 'world':
+      default: 
+        if (sessionData.current_mode === 'combat' || sessionData.current_mode === 'staging') {
+          return (
+            <div className="staging-layout">
+              <div className="grid-container">
+                <CombatGrid
+                  participants={onGridParticipants}
+                  isGM={isGM}
+                  onTokenMove={handleTokenMove}
+                  onGridClick={handleGridClick}
+                  onTokenClick={handleTokenClick}
+                  activeParticipantId={activeParticipant?.id}
+                  showMovementFor={selectedAction.type === 'MOVE' && isMyTurn ? activeParticipant : null}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const participantId = e.dataTransfer.getData("participantId");
+                    const gridRect = e.currentTarget.getBoundingClientRect();
+                    const x = Math.floor((e.clientX - gridRect.left) / 50);
+                    const y = Math.floor((e.clientY - gridRect.top) / 50);
+                    if (participantId) {
+                      handleTokenMove(participantId, x, y);
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          );
+        } else { // Exploration mode
+          return (
+            <div className="exploration-view">
+              <p>Exploration mode - world view will appear here.</p>
+            </div>
+          );
+        }
+    }
+  };
+const handleGiveItem = async (payload) => {
+    try {
+      await axios.post('http://localhost:8000/gm/give-item', payload);
+      setIsGiveItemModalOpen(false); // Close modal on success
+      // The websocket will handle updating the player's inventory view
+    } catch (error) {
+      console.error("Failed to give item:", error);
+      alert("Failed to give item. See console for details.");
+    }
+  };
   const togglePanelCollapse = (panelKey) => {
     setLayout(prevLayout =>
       prevLayout.map(panel => {
@@ -193,6 +268,13 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
           onSkillCheckRequested={handleRequestSkillCheck}
         />
       )}
+      {isGiveItemModalOpen && (
+        <GiveItemModal
+          participants={sessionData.participants}
+          onClose={() => setIsGiveItemModalOpen(false)}
+          onGiveItem={handleGiveItem}
+        />
+      )}
       {isNpcManagerOpen && (
         <NpcManager
           gmId={currentUser.id}
@@ -210,7 +292,7 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
           width={window.innerWidth} // Make it responsive to window size
           onLayoutChange={handleLayoutChange}
           draggableHandle=".panel-header"
-          draggableCancel=".panel-collapse-button"
+          draggableCancel=".panel-header button"
         >
     {isPromptVisible && (
         <div key="skill_check" data-grid={{x: 0, y: 0, w: 3, h: 4}}>
@@ -248,49 +330,15 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
             </Panel>
           </div>
 
-          <div key="main">
-            <Panel title="The World" onCollapse={() => togglePanelCollapse('main')}
-              isCollapsed={layout.find(p => p.i === 'main')?.h === COLLAPSED_HEIGHT}>
+          <div key="main" className="main-panel-wrapper">
+            <Panel onCollapse={() => togglePanelCollapse('main')}
+              isCollapsed={layout.find(p => p.i === 'main')?.h === COLLAPSED_HEIGHT}
+              // Pass the new tab props
+              tabs={mainPanelTabs}
+              activeTab={mainPanelTab}
+              onTabClick={setMainPanelTab}>
+                {renderMainPanelContent()}
 
-
-              {sessionData.current_mode === 'exploration' && (
-                <div className="exploration-view">
-                </div>
-              )}
-              {(sessionData.current_mode === 'staging' || sessionData.current_mode === 'combat') && (
-                <div className="staging-layout">
-                  <div className="grid-container">
-                    <CombatGrid
-                      participants={onGridParticipants}
-                      isGM={isGM}
-                      // --- RECONNECT EXISTING HANDLERS ---
-                      onTokenMove={handleTokenMove}
-                      onGridClick={handleGridClick}
-                      onTokenClick={handleTokenClick}
-
-                      activeParticipantId={activeParticipant?.id}
-                      showMovementFor={selectedAction.type === 'MOVE' && isMyTurn ? activeParticipant : null}
-
-                      // --- ADD DROP FUNCTIONALITY ---
-                      onDragOver={(e) => e.preventDefault()} // This is required to allow a drop
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        const participantId = e.dataTransfer.getData("participantId");
-
-                        // Calculate grid coordinates from the drop position
-                        const gridRect = e.currentTarget.getBoundingClientRect();
-                        const x = Math.floor((e.clientX - gridRect.left) / 50); // Assumes 50px grid cells
-                        const y = Math.floor((e.clientY - gridRect.top) / 50);
-
-                        // Call the existing function to update the backend
-                        if (participantId) {
-                          handleTokenMove(participantId, x, y);
-                        }
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
 
             </Panel>
           </div>
@@ -307,6 +355,7 @@ function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef
                       <button onClick={handlePrepareForCombat}>Prepare for Combat</button>
                       <button onClick={() => setIsNpcManagerOpen(true)}>Manage NPCs</button>
                       <button onClick={() => setIsSkillCheckModalOpen(true)}>Request Skill Check</button>
+                      <button onClick={() => setIsGiveItemModalOpen(true)}>Give Item</button>
                     </>
                   )}
                   {sessionData.current_mode === 'staging' && (

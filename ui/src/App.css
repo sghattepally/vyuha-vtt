@@ -496,11 +496,14 @@ body {
 
 .modal-backdrop {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.7);
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 2%;
+    border-radius: 5%;
+    border: #555555 1px solid;
+  
+  background-color: rgba(0,0,0, 0.9);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -1659,4 +1662,203 @@ body {
 .disabled-label {
   color: #777;
   cursor: not-allowed;
+}
+
+.header-main-content {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem; /* Space between title and tabs */
+}
+
+.header-main-content h3 {
+  margin: 0;
+  font-size: 1rem;
+  white-space: nowrap; /* Prevent title from wrapping */
+}
+
+.panel-header-tabs {
+  display: flex;
+  align-items: center;
+}
+
+/* Re-using your tab-button style */
+.panel-header-tabs .tab-button {
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease-in-out;
+}
+
+.panel-header-tabs .tab-button.active {
+  color: #ff9800;
+  border-bottom-color: #ff9800;
+}
+
+.panel-header-tabs .tab-button:disabled {
+  color: #666;
+  cursor: not-allowed;
+}
+
+.give-item-modal {
+  min-width: 550px;
+}
+
+.quantity-slider {
+  width: 100%;
+}
+
+.give-item-modal input[type="text"],
+.give-item-modal input[type="number"],
+.give-item-modal select {
+  width: 100%;
+  padding: 10px;
+  background-color: #1e1e1e;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 1em;
+  box-sizing: border-box; /* Prevents padding from breaking layout */
+}
+
+/* Focus highlight */
+.give-item-modal input:focus,
+.give-item-modal select:focus {
+  outline: none;
+  border-color: #ff9800;
+}
+
+/* --- New Inventory Grid Styles --- */
+
+.inventory-panel-grid {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 10px;
+}
+
+.inventory-currency {
+  text-align: right;
+  font-weight: bold;
+  color: #ffc107;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #444;
+  flex-shrink: 0; /* Prevent from shrinking */
+}
+
+.inventory-section {
+  margin-bottom: 1rem;
+}
+
+.inventory-section-header {
+  margin: 0 0 8px 0;
+  font-size: 0.9em;
+  color: #aaa;
+  text-transform: uppercase;
+}
+
+.item-grid {
+  display: grid;
+  /* This creates the 10-column layout */
+  grid-template-columns: repeat(10, 1fr);
+  gap: 8px;
+}
+
+.item-grid.scrollable {
+  max-height: 250px; /* Adjust this value as needed */
+  overflow-y: auto;
+  padding-right: 5px; /* Space for the scrollbar */
+}
+
+.item-tile {
+  position: relative;
+  aspect-ratio: 1 / 1; /* Makes the tile a perfect square */
+  background-color: #2c2f33;
+  border: 1px solid #444;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.item-tile:hover {
+  background-color: #3a3f44;
+  border-color: #ff9800;
+}
+
+.item-placeholder {
+  font-size: 1.8em;
+  font-weight: bold;
+  color: #aaa;
+  flex-grow: 1;
+  display: flex;
+  align-items: center;
+}
+
+.item-tile-name {
+  font-size: 0.7em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  text-align: center;
+  background-color: rgba(0, 0, 0, 0.4);
+  padding: 2px 0;
+  border-radius: 0 0 3px 3px;
+}
+
+.item-quantity-badge {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  background-color: #ff9800;
+  color: #1e1e1e;
+  font-size: 0.7em;
+  font-weight: bold;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.item-tile.equipped-tile {
+  border-color: #4caf50; /* A green border to indicate equipped */
+  box-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
+}
+
+.inventory-menu {
+  position: fixed;
+  z-index: 1000;
+  background-color: #2c2f33;
+  border: 1px solid #555;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  min-width: 150px;
+}
+
+.inventory-menu ul {
+  list-style: none;
+  padding: 5px;
+  margin: 0;
+}
+
+.inventory-menu li {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.inventory-menu li:hover {
+  background-color: #ff9800;
+  color: #1e1e1e;
+}
+
+.inventory-menu li.destructive:hover {
+  background-color: #e53935; /* Red for destructive actions */
+  color: #fff;
 }

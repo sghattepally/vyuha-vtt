@@ -1,26 +1,35 @@
 import React from 'react';
 
-function Panel({ title, children, onCollapse, isCollapsed, contentClassName }) {
+function Panel({ title, children, onCollapse, isCollapsed, contentClassName, tabs, activeTab, onTabClick }) {
   return (
     <div className="panel">
       <div className="panel-header">
-        <h3>{title}</h3>
-        {/*
-          This now checks for the onCollapse function.
-          The button's text will change based on the isCollapsed prop.
-        */}
+        <div className="header-main-content">
+          <h3>{title}</h3>
+          {/* If tabs are provided, render them */}
+          {tabs && (
+            <div className="panel-header-tabs">
+              {tabs.map(tab => (
+                <button
+                  key={tab.key}
+                  className={`tab-button ${activeTab === tab.key ? 'active' : ''}`}
+                  onClick={() => onTabClick(tab.key)}
+                  disabled={tab.disabled}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         {onCollapse && (
           <button className="panel-collapse-button" onClick={onCollapse}>
             {isCollapsed ? '＋' : '−'}
           </button>
         )}
       </div>
-      {/*
-        The content is now conditionally rendered so it doesn't take up
-        space in the DOM when the panel is collapsed.
-      */}
       {!isCollapsed && (
-        <div className={`panel-content ${contentClassName}`}>
+        <div className={`panel-content ${contentClassName || ''}`}>
           {children}
         </div>
       )}

@@ -1,11 +1,12 @@
 # app/models.py
 
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, Boolean, Enum as SQLAlchemyEnum
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 from sqlalchemy.types import JSON, DateTime
 from sqlalchemy.sql import func
 import os 
 from dotenv import load_dotenv 
+import enum
 
 load_dotenv() 
 
@@ -23,11 +24,46 @@ class User(Base):
     current_session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=True)
     characters = relationship("Character", back_populates="owner")
 
+class ItemType(str, enum.Enum):
+    WEAPON = "weapon"
+    ARMOR = "armor"
+    POTION = "potion"
+    GENERAL = "general"
+
+class Item(Base):
+    __tablename__ = "items"
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # As requested, separate names for lore and global audiences
+    puranic_name = Column(String, unique=True, nullable=False)
+    english_name = Column(String, nullable=True)
+    
+    description = Column(Text)
+    item_type = Column(SQLAlchemyEnum(ItemType), nullable=False)
+    
+    # Fields for game mechanics
+    is_stackable = Column(Boolean, default=False)
+    on_use_ability_id = Column(Integer, ForeignKey("abilities.id"), nullable=True)
+
+class CharacterInventory(Base):
+    __tablename__ = "character_inventory"
+    id = Column(Integer, primary_key=True, index=True)
+    
+    character_id = Column(Integer, ForeignKey("characters.id"), nullable=False)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False)
+    
+    quantity = Column(Integer, default=1)
+    is_equipped = Column(Boolean, default=False)
+
+    # Relationships to easily access the data
+    character = relationship("Character")
+    item = relationship("Item")
+
 class Ability(Base):
     __tablename__ = "abilities"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True)
-    description = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
     action_type = Column(String)
     resource_cost = Column(Integer, default=0)
     resource_type = Column(String, nullable=True)
@@ -42,7 +78,7 @@ class Race(Base):
     __tablename__ = "races"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
-    description = Column(String)
+    description = Column(Text)
     
     # --- Racial Attribute Modifiers ---
     # Storing these as separate columns for clarity and performance.
@@ -60,7 +96,7 @@ class Char_Class(Base):
     __tablename__ = "char_classes"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
-    description = Column(String)
+    description = Column(Text)
     primary_attribute = Column(String) # e.g., "Bala" or "Buddhi"
     
     # --- Base Attribute Scores ---
@@ -81,7 +117,7 @@ class Subclass(Base):
     __tablename__ = "subclasses"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
-    description = Column(String)
+    description = Column(Text)
 
     # --- Subclass-Specific Rules ---
     level_requirement = Column(Integer, default=3)
@@ -108,8 +144,10 @@ class Character(Base):
     subclass = relationship("Subclass")
     level = Column(Integer, default=1)
     unlocked_loka_attunement = Column(String, nullable=True)
+    currency = Column(Integer, default=0)
     movement_speed = Column(Integer, default=6)
     session_characters = relationship("SessionCharacter", back_populates="character")
+    inventory = relationship("CharacterInventory", back_populates="character")
 
 # --- Junction / Link Tables ---
 class CharacterAbility(Base):
@@ -168,7 +206,7 @@ class SkillCheck(Base):
     
     check_type = Column(String, nullable=False) # e.g., "dakshata", "moha"
     dc = Column(Integer, nullable=False)
-    description = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
     status = Column(String, default="pending") # Can be 'pending' -> 'completed'
 
     participant = relationship("SessionCharacter")

@@ -77,6 +77,31 @@ const formatLogEntry = (entry, participants) => {
         );
         case 'turn_order_set':
             return <span className="log-system">--- The turn order is set: {entry.details.order}. ---</span>;
+        case 'gm_give_item': {
+            const { character_name, item_name, quantity } = entry.details;
+            return <span>The Game Master gives <strong>{item_name} (x{quantity})</strong> to <strong>{character_name}</strong>.</span>;
+        }
+
+        case 'item_use': {
+            const { character_name, item_name } = entry.details;
+            return <span><strong>{character_name}</strong> uses a <strong>{item_name}</strong>.</span>;
+        }
+
+        case 'item_destroy': {
+            const { character_name, item_name } = entry.details;
+            return <span><strong>{character_name}</strong> destroys their <strong>{item_name}</strong>.</span>;
+        }
+
+        case 'item_give': {
+            const { giver_name, receiver_name, item_name, quantity } = entry.details;
+            return <span><strong>{giver_name}</strong> gives <strong>{item_name} (x{quantity})</strong> to <strong>{receiver_name}</strong>.</span>;
+        }
+
+        case 'item_equip': {
+            const { character_name, item_name, equipped } = entry.details;
+            const action = equipped ? 'equips' : 'unequips';
+            return <span><strong>{character_name}</strong> {action} their <strong>{item_name}</strong>.</span>;
+        }
         default:
             return `Unknown event: ${entry.event_type}`;
     }
