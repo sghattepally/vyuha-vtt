@@ -7,15 +7,21 @@ import os
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from sqlalchemy.orm import Session, joinedload
 from . import models, game_rules
-from .models import engine, SessionLocal
+from .models import engine, SessionLocal, ItemType, ActionType, ResourceType, TargetType 
 import pydantic
 import random
-from typing import List
+from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
 import json, string
 import asyncio
 import datetime
 import math
+from .ability_system import (
+    AbilitySystem, 
+    AbilityExecutionRequest, 
+    TargetInfo,
+    AbilityExecutionResult
+)
 
 # ==================================
 # 2. Database Setup
@@ -44,10 +50,13 @@ class PlayerSchema(pydantic.BaseModel):
 class AbilityCreate(pydantic.BaseModel):
     name: str
     description: str | None = None
-    action_type: str
+    action_type: ActionType # Use the Enum for strict validation
+    resource_cost: int
+    resource_type: Optional[ResourceType] = None # Use the Enum
+    requirements: Optional[Dict[str, Any]] = None # For JSON data
+    target_type: TargetType
+    effect_radius: int = 0
     range: int = 1
-    resource_cost: int = 0
-    resource_type: str | None = None
     to_hit_attribute: str | None = None
     effect_type: str
     damage_dice: str | None = None
@@ -92,7 +101,7 @@ class ItemSchema(pydantic.BaseModel):
     puranic_name: str
     english_name: str | None = None
     description: str | None = None
-    item_type: str
+    item_type: ItemType
     is_stackable: bool
 
     class Config:
@@ -186,6 +195,9 @@ class SessionCharacterSchema(pydantic.BaseModel):
     current_maya: int
     remaining_speed: int
     status: str
+    actions: int
+    bonus_actions: int
+    reactions: int
     character: CharacterSchema
     class Config:
         from_attributes = True
@@ -291,6 +303,12 @@ class GiveItemRequest(pydantic.BaseModel):
 class GiveItemPlayerRequest(pydantic.BaseModel):
     target_character_id: int
     quantity: int
+
+class ActionPayload(pydantic.BaseModel):
+    actor_id: int
+    ability_id: int
+    target_id: int | None = None
+    target_pos: dict | None = None # e.g., {"x": 10, "y": 12}
 
 # ==================================
 # 4. The FastAPI App Instance & CORS
@@ -777,7 +795,11 @@ async def begin_combat(session_id: int, background_tasks: BackgroundTasks, db: S
             p.status = 'active'
     
     initiative_results.sort(key=lambda x: (x['score'], x['dakshata']), reverse=True)
-    
+    for p in session.participants:
+        p.actions = 1
+        p.bonus_actions = 1
+        p.reactions = 4
+        db.add(p)
     session.turn_order = [result['participant_id'] for result in initiative_results]
     session.current_turn_index = 0
     session.current_mode = 'combat'
@@ -792,8 +814,60 @@ async def begin_combat(session_id: int, background_tasks: BackgroundTasks, db: S
     
     return GameSessionSchema.model_validate(session)
 
-# --- THE GAME ENGINE ---
-# In app/main.py, replace the entire perform_action function with this:
+
+@app.post("/sessions/{session_id}/ability", response_model=ActionResponse)
+async def execute_ability(
+    session_id: int, 
+    request: AbilityExecutionRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    New unified endpoint for ability execution.
+    Handles all ability types: attacks, heals, buffs, area effects, etc.
+    """
+    
+    # Initialize the ability system
+    ability_system = AbilitySystem(db, session_id)
+    
+    # Execute the ability
+    result = ability_system.execute_ability(request)
+    
+    if not result.success:
+        print(f"DEBUG: Ability FAILED - {result.message}")
+        raise HTTPException(status_code=400, detail=result.message)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"CRITICAL DB ERROR: Failed to commit ability execution: {e}")
+        raise HTTPException(status_code=500, detail="Database update failed after action.")
+    # Log all events
+    for log_detail in result.log_events:
+        event_type = log_detail.pop("event_type")
+        log_event(
+            db, 
+            session_id, 
+            event_type,
+            actor_id=request.actor_id,
+            target_id=log_detail.get("target_id"),
+            details=log_detail
+        )
+    
+    # Broadcast updates
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    
+    # Fetch and return updated session
+    session = db.query(models.GameSession).filter(
+        models.GameSession.id == session_id
+    ).first()
+    
+    return ActionResponse(
+        session=GameSessionSchema.model_validate(session),
+        message=result.message
+    )
+
 
 @app.post("/sessions/{session_id}/action", response_model=ActionResponse)
 async def perform_action(session_id: int, action: GameAction, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -887,7 +961,10 @@ async def next_turn(session_id: int, background_tasks: BackgroundTasks, db: Sess
     next_index = (session.current_turn_index + 1) % len(session.turn_order)
     session.current_turn_index = next_index
     next_char = db.query(models.SessionCharacter).filter(models.SessionCharacter.id == session.turn_order[next_index]).first()
-    if next_char: next_char.remaining_speed = next_char.character.movement_speed
+    if next_char: 
+        next_char.remaining_speed = next_char.character.movement_speed
+        next_char.actions = 1
+        next_char.bonus_actions = 1
     
     db.commit()
 
@@ -1405,15 +1482,41 @@ async def give_inventory_item(inventory_id: int, request: GiveItemPlayerRequest,
 
     return {"message": "Item transferred."}
 
-# --- NEW: Endpoint to Use/Consume an Item ---
 @app.post("/inventory/{inventory_id}/use")
 async def use_inventory_item(inventory_id: int, db: Session = Depends(get_db)):
-    inventory_item = db.query(models.CharacterInventory).options(joinedload(models.CharacterInventory.item)).filter(models.CharacterInventory.id == inventory_id).first()
+    
+    inventory_item = db.query(models.CharacterInventory).options(
+        joinedload(models.CharacterInventory.item),
+        joinedload(models.CharacterInventory.character) 
+    ).filter(models.CharacterInventory.id == inventory_id).first()
+    
     if not inventory_item:
         raise HTTPException(status_code=404, detail="Item not found.")
 
-    # Decrement quantity
+    # Retrieve the ability ID directly from the loaded item
+    # NOTE: This assumes you have already added the 'on_use_ability_id' column to your Item model!
+    ability_id_to_use = getattr(inventory_item.item, 'on_use_ability_id', None) 
+    
+    # CRITICAL: Find the active SessionCharacter (Actor)
+    active_participant = db.query(models.SessionCharacter).filter(
+        models.SessionCharacter.character_id == inventory_item.character_id
+    ).first()
+
+    if not active_participant:
+        # If the character is not active in a session, they can't use an item.
+        raise HTTPException(status_code=400, detail="Character is not an active participant in a session.")
+
+    # Get necessary IDs
+    actor_id = active_participant.id
+    session_id = active_participant.session_id
+    
+    # 2. Decrement quantity and handle deletion
     inventory_item.quantity -= 1
+    
+    if inventory_item.quantity <= 0:
+        db.delete(inventory_item)
+    else:
+        db.add(inventory_item)
     
     log_details = {
         "action": "Used Item",
@@ -1421,19 +1524,52 @@ async def use_inventory_item(inventory_id: int, db: Session = Depends(get_db)):
         "item_name": inventory_item.item.puranic_name
     }
 
-    if inventory_item.quantity <= 0:
-        db.delete(inventory_item)
-    else:
-        db.add(inventory_item)
-    
-    db.commit()
+    # 3. Execute the Linked Ability (NEW CRITICAL LOGIC)
+    if ability_id_to_use:
+        # Query the ability directly to get its name for logging
+        triggered_ability = db.query(models.Ability).filter(
+            models.Ability.id == ability_id_to_use
+        ).first()
+        
+        if not triggered_ability:
+             db.rollback() 
+             raise HTTPException(status_code=404, detail=f"Linked Ability ID {ability_id_to_use} not found.")
 
-    # We can add logic here later to trigger the item's actual effect (e.g., healing)
-    # For now, we just log that it was used.
-    session_character = db.query(models.SessionCharacter).filter(models.SessionCharacter.character_id == inventory_item.character_id).first()
-    if session_character:
-        log_event(db, session_character.session_id, 'item_use', details=log_details)
-        await manager.broadcast_session_state(session_character.session_id, db)
-        await manager.broadcast_json(session_character.session_id, json.dumps({"type": "new_log_entry"}))
+        # Create the ability request (targets SELF for healing potions)
+        request = AbilityExecutionRequest(
+            actor_id=actor_id,
+            ability_id=ability_id_to_use,
+            primary_target=TargetInfo(participant_id=actor_id) 
+        )
+        
+        # Initialize and execute the ability system
+        ability_system = AbilitySystem(db, session_id=session_id)
+        result = ability_system.execute_ability(request)
+        
+        if not result.success:
+            # Item was consumed, but ability failed.
+            log_details["ability_failure"] = f"{triggered_ability.name} failed: {result.message}"
+        else:
+            # Log all events generated by the ability (e.g., 'heal' event)
+            for log_detail in result.log_events:
+                event_type = log_detail.pop("event_type", "ability_effect")
+                log_event(
+                    db, 
+                    session_id, 
+                    event_type,
+                    actor_id=actor_id,
+                    target_id=actor_id,
+                    details=log_detail
+                )
+            
+            log_details["ability_success"] = triggered_ability.name
+            
+        # Commit any pending log entries and session changes from the ability system
+        db.commit() 
+        
+    # 4. Log and Broadcast 
+    log_event(db, session_id, 'item_use', details=log_details)
+    await manager.broadcast_session_state(session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
 
     return {"message": f"{inventory_item.item.puranic_name} was used."}

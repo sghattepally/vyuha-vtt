@@ -10,12 +10,29 @@ const formatLogEntry = (entry, participants) => {
     const target = entry.target_id ? participantMap.get(entry.target_id) : null;
     const actorName = actor?.character.name || entry.details.actor_name || 'Someone';
     const targetName = target?.character.name || entry.details.target_name || 'Someone';
+    const formatPos = (pos) => pos ? `(${pos.x}, ${pos.y})` : 'unknown location';
 
     switch (entry.event_type) {
         case 'player_join':
             return `--- ${entry.details.player_name} has joined the session. ---`;
         case 'character_select':
             return `--- ${entry.details.player_name} has chosen to play as ${entry.details.character_name}. ---`;
+        case 'teleport': // Handles the Move/Teleport ability effect
+      const distance = entry.details.distance ? ` (${entry.details.distance} squares)` : '';
+      const status = entry.details.status_applied ? ` and gained ${entry.details.status_applied}` : '';
+      return (
+        <span className="log-entry teleport">
+          <span className="actor">{actorName}</span> used **{entry.details.ability_name}** to move from {formatPos(entry.details.old_pos)} to {formatPos(entry.details.new_pos)}{distance}.{status}
+        </span>
+      );
+
+    case 'heal': // Handles healing from abilities (like Sanjivani Blessing)
+    case 'heal_from_item': // Optional: for dedicated item healing log if you keep that backend logic
+      return (
+        <span className="log-entry heal">
+          <span className="actor">{actorName}</span> healed <span className="target">{targetName}</span> for **{entry.details.healing}** Prana.
+        </span>
+      );
         case 'move':
             return `${actorName} moves to (${entry.details.new_pos.x}, ${entry.details.new_pos.y}).`;
         case 'token_place':

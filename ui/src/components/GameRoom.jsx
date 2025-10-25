@@ -4,7 +4,7 @@ import GridLayout from 'react-grid-layout';
 import Panel from './Panel';
 import CombatGrid from './CombatGrid';
 import InitiativeTracker from './InitiativeTracker';
-import ActionPanel from './ActionPanel';
+import AbilityActionPanel from './AbilityActionPanel';
 import GameLog from './GameLog';
 import SkillCheckModal from './SkillCheckModal';
 import SkillCheckPrompt from './SkillCheckPrompt';
@@ -25,9 +25,11 @@ const initialLayout = [
 ];
 const COLLAPSED_HEIGHT = 1;
 function GameRoom({ sessionData, currentUser, isGM, isGmOverride, dragPreviewRef , newLogTrigger }) {
+  const [gridTargetAbility, setGridTargetAbility] = useState(null);
   const [selectedAction, setSelectedAction] = useState({ type: 'none', ability: null });
   const [activeCharacterAbilities, setActiveCharacterAbilities] = useState([]);
   const [turnActions, setTurnActions] = useState({ hasAttacked: false });
+  const abilityPanelCleanupRef = useRef(null);
   const [isNpcManagerOpen, setIsNpcManagerOpen] = useState(false);
   const [isSkillCheckModalOpen, setIsSkillCheckModalOpen] = useState(false);
   const [isGiveItemModalOpen, setIsGiveItemModalOpen] = useState(false);
@@ -214,18 +216,59 @@ const handleGiveItem = async (payload) => {
     : null;
   const isMyTurn = activeParticipant && (activeParticipant.player_id === currentUser.id || effectiveIsGM);
   const currentUserParticipant = sessionData.participants.find(p => p.player_id === currentUser.id);
-
+  
   const displayCharacter = currentUserParticipant?.character;
-  const handleGridClick = (x, y) => {
-    if (selectedAction.type === 'MOVE' && activeParticipant && isMyTurn) {
-      handlePerformAction({ actor_id: activeParticipant.id, action_type: 'MOVE', new_x: x, new_y: y });
+  const handleGridClick = async (x, y) => {
+  if (gridTargetAbility && activeParticipant && isMyTurn) {
+    try {
+      const payload = {
+        actor_id: activeParticipant.id,
+        ability_id: gridTargetAbility.id,
+        primary_target: { x: x, y: y },
+        secondary_targets: [],
+      };
+
+      await axios.post(`http://localhost:8000/sessions/${sessionData.id}/ability`, payload);
+      
+      setGridTargetAbility(null);
+      
+    } catch (err) {
+      console.error("Ground-targeted ability failed:", err.response?.data?.detail || err);
+      setGridTargetAbility(null);
     }
-  };
-  const handleTokenClick = (targetId) => {
-    if (selectedAction.type === 'TARGETING' && activeParticipant && isMyTurn) {
-      handlePerformAction({ actor_id: activeParticipant.id, action_type: 'ATTACK', target_id: targetId, ability_id: selectedAction.ability.id });
+  }
+};
+  const [participantTargetAbility, setParticipantTargetAbility] = useState(null);
+  const handleSetParticipantTargeting = (ability) => {
+    console.log("DEBUG_FE: SETTING PARTICIPANT TARGET ABILITY:", ability?.name);
+    setParticipantTargetAbility(ability);
+};
+const handleTokenClick = async (targetId) => {
+    if (participantTargetAbility && activeParticipant && isMyTurn) {
+        if (targetId === activeParticipant.id && participantTargetAbility.target_type !== 'self') {
+             return; 
+        }
+
+        try {
+            const payload = {
+                actor_id: activeParticipant.id,
+                ability_id: participantTargetAbility.id,
+                primary_target: { participant_id: targetId }, // Target is a participant ID
+                secondary_targets: [],
+            };
+
+            await axios.post(`http://localhost:8000/sessions/${sessionData.id}/ability`, payload);
+            setParticipantTargetAbility(null);
+            if (abilityPanelCleanupRef.current) {
+                abilityPanelCleanupRef.current();
+            }
+            
+        } catch (err) {
+            console.error("Player-targeted ability failed:", err.response?.data?.detail || err);
+            // Don't clear state on error yet, let the user re-try or cancel
+        }
     }
-  };
+};
   const latestCheckForPlayer = sessionData.skill_checks
     ?.filter(check => check.participant_id === currentUserParticipant?.id)
     .sort((a, b) => b.id - a.id)[0]; // Get the most recent one
@@ -371,15 +414,19 @@ const handleGiveItem = async (payload) => {
               {sessionData.current_mode === 'combat' ? (
                 <>
                   <InitiativeTracker participants={sessionData.participants} turnOrder={sessionData.turn_order} currentTurnIndex={sessionData.current_turn_index} />
-                  <ActionPanel 
-                  abilities={activeCharacterAbilities} 
-                  isMyTurn={isMyTurn} 
-                  activeParticipant={activeParticipant} 
-                  selectedAction={selectedAction} 
-                  turnActions={turnActions} 
-                  onSelectMove={() => setSelectedAction({ type: 'MOVE' })}
-                  onSelectAbility={(ability) => setSelectedAction({ type: 'TARGETING', ability })} 
-                    onEndTurn={handleEndTurn} />
+                  <AbilityActionPanel
+                      abilities={activeCharacterAbilities}
+                      isMyTurn={isMyTurn}
+                      activeParticipant={activeParticipant}
+                      sessionId={sessionData.id}
+                      participants={sessionData.participants}
+                      onEndTurn={handleEndTurn}
+                      onActionComplete={() => {
+                      }}
+                      onSetGridTargeting={(ability) => setGridTargetAbility(ability)}
+                      onSetParticipantTargeting={handleSetParticipantTargeting}
+                      cleanupRef={abilityPanelCleanupRef}
+                    />
                 </>
               ) : (
                 currentUserParticipant && displayCharacter ? (

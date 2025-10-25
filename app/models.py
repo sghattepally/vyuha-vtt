@@ -30,6 +30,24 @@ class ItemType(str, enum.Enum):
     POTION = "potion"
     GENERAL = "general"
 
+class ActionType(str, enum.Enum):
+    ACTION = "action"
+    BONUS_ACTION = "bonus action"
+    REACTION = "reaction"
+    FREE = "free"
+
+class ResourceType(str, enum.Enum):
+    TAPAS = "tapas"
+    MAYA = "maya"
+    SPEED = "speed"
+    PRANA = "prana"
+
+class TargetType(str, enum.Enum):
+    SELF = "self"
+    ENEMY = "enemy"
+    ALLY = "ally"
+    GROUND = "ground"
+
 class Item(Base):
     __tablename__ = "items"
     id = Column(Integer, primary_key=True, index=True)
@@ -64,9 +82,16 @@ class Ability(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True)
     description = Column(Text, nullable=True)
-    action_type = Column(String)
+    
+    action_type = Column(SQLAlchemyEnum(ActionType), nullable=False)
     resource_cost = Column(Integer, default=0)
-    resource_type = Column(String, nullable=True)
+    resource_type = Column(SQLAlchemyEnum(ResourceType), nullable=True)
+    requirements = Column(JSON, nullable=True)
+
+    target_type = Column(SQLAlchemyEnum(TargetType), nullable=False, default=TargetType.ENEMY)
+
+    effect_radius = Column(Integer, default=0)
+
     to_hit_attribute = Column(String, nullable=True)
     effect_type = Column(String)
     damage_dice = Column(String, nullable=True)
@@ -166,6 +191,9 @@ class SessionCharacter(Base):
     current_tapas = Column(Integer)
     current_maya = Column(Integer)
     remaining_speed = Column(Integer, default=0)
+    actions = Column(Integer, default=1)
+    bonus_actions = Column(Integer, default=1)
+    reactions = Column(Integer, default=4)
     status = Column(String, default="active") # e.g., 'active', 'downed'
     x_pos = Column(Integer, nullable=True)
     y_pos = Column(Integer, nullable=True)
