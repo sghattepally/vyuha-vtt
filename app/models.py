@@ -201,6 +201,9 @@ class SessionCharacter(Base):
     status = Column(String, default="active") # e.g., 'active', 'downed'
     x_pos = Column(Integer, nullable=True)
     y_pos = Column(Integer, nullable=True)
+    level = Column(Integer, default=1)
+    learned_abilities = Column(JSON, default=list)  # List of ability IDs
+    npc_type = Column(String, nullable=True)  # "ally", "neutral", "enemy", or null
     character = relationship("Character")
     session = relationship("GameSession", back_populates="participants")
 
@@ -217,6 +220,11 @@ class GameSession(Base):
     active_loka_summoning = Column(JSON, default=dict)
     environmental_resonance = Column(String, default='none')
     participants = relationship("SessionCharacter", back_populates="session")
+    campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=True)
+    character_selections = Column(JSON, default=dict)  # {player_id: character_id}
+    active_scene_id = Column(Integer, ForeignKey("scenes.id"), nullable=True)
+    campaign = relationship("Campaign", back_populates="sessions")
+    active_scene = relationship("Scene", foreign_keys=[active_scene_id])
     log_entries = relationship("GameLogEntry", back_populates="session", cascade="all, delete-orphan")
     skill_checks = relationship("SkillCheck", back_populates="session", cascade="all, delete-orphan")
     environmental_objects = relationship("EnvironmentalObject", back_populates="session", cascade="all, delete-orphan")
@@ -260,37 +268,29 @@ class EnvironmentalObjectType(str, enum.Enum):
 
 class EnvironmentalObject(Base):
     __tablename__ = "environmental_objects"
-    
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=False)
-    
     # Identity
     name = Column(String, nullable=False)
     object_type = Column(SQLAlchemyEnum(EnvironmentalObjectType))
     description = Column(Text, default="")
     icon_url = Column(String, nullable=True)
-    
     # Grid Positioning (list of {x, y} dicts)
     grid_positions = Column(JSON, default=list)
-    
     # Structural Properties
     has_sections = Column(Boolean, default=False)
     total_sections = Column(Integer, default=1)
     current_integrity = Column(Integer, default=100)
     max_integrity = Column(Integer, default=100)
     critical_threshold = Column(Integer, default=0)
-    
     # Defensive Properties
     evasion_dc = Column(Integer, default=10)
     armor_value = Column(Integer, default=0)
-    
     # Status
     is_functional = Column(Boolean, default=True)
     is_visible_to_players = Column(Boolean, default=True)
-    
     # Metadata (for campaign-specific data)
     camp_metadata = Column(JSON, default=dict)
-    
     # Relationships
     session = relationship("GameSession", back_populates="environmental_objects")
     sections = relationship("EnvironmentalObjectSection", back_populates="parent_object", cascade="all, delete-orphan")
@@ -298,28 +298,62 @@ class EnvironmentalObject(Base):
 
 class EnvironmentalObjectSection(Base):
     __tablename__ = "environmental_object_sections"
-    
     id = Column(Integer, primary_key=True, index=True)
     parent_id = Column(Integer, ForeignKey("environmental_objects.id"), nullable=False)
-    
     # Identity
     section_name = Column(String, nullable=False)
     section_index = Column(Integer, nullable=False)
-    
     # Positioning
     grid_positions = Column(JSON, default=list)
-    
     # Health
     current_integrity = Column(Integer)
     max_integrity = Column(Integer)
-    
     # Defensive Properties
     evasion_dc = Column(Integer, default=10)
     armor_value = Column(Integer, default=0)
-    
     # Status
     is_destroyed = Column(Boolean, default=False)
     is_critical = Column(Boolean, default=False)
-    
     # Relationship
     parent_object = relationship("EnvironmentalObject", back_populates="sections")
+
+# === CAMPAIGN AND SCENE OBJECTS SYSTEM ===
+
+class Campaign(Base):
+    """Campaign template with pre-gen characters and scenes"""
+    __tablename__ = "campaigns"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    theme = Column(String)
+    recommended_level = Column(Integer, default=1)
+    recommended_party_size = Column(Integer, default=4)
+    estimated_duration_minutes = Column(Integer, default=60)
+    
+    # Character pools (JSON arrays of character IDs)
+    player_character_ids = Column(JSON, default=list)
+    npc_character_ids = Column(JSON, default=list)
+    enemy_character_ids = Column(JSON, default=list)
+    
+    creator_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    is_published = Column(Boolean, default=False)
+    
+    scenes = relationship("Scene", back_populates="campaign", cascade="all, delete-orphan")
+    sessions = relationship("GameSession", back_populates="campaign")
+
+
+class Scene(Base):
+    """Visual scene for exploration mode"""
+    __tablename__ = "scenes"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=False)
+    
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    scene_order = Column(Integer, default=0)
+    background_url = Column(String, nullable=True)
+    cards = Column(JSON, default=list)
+    
+    campaign = relationship("Campaign", back_populates="scenes")

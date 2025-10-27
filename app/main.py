@@ -302,6 +302,9 @@ class GameSessionSchema(pydantic.BaseModel):
     active_loka_resonance: str
     participants: List[SessionCharacterSchema] = []
     turn_order: List[int] = []
+    campaign_id: Optional[int] = None
+    character_selections: Dict[int, int] = {}
+    active_scene_id: Optional[int] = None
     current_turn_index: int = 0
     skill_checks: List[SkillCheckSchema] = []
     environmental_objects: List[EnvironmentalObjectSchema] = []
@@ -374,6 +377,69 @@ class ActionPayload(pydantic.BaseModel):
     ability_id: int
     target_id: int | None = None
     target_pos: dict | None = None # e.g., {"x": 10, "y": 12}
+
+class CampaignCreate(pydantic.BaseModel):
+    name: str
+    description: str = ""
+    theme: str = ""
+    recommended_level: int = 1
+    recommended_party_size: int = 4
+    estimated_duration_minutes: int = 60
+    player_character_ids: List[int] = []
+    npc_character_ids: List[int] = []
+    enemy_character_ids: List[int] = []
+    creator_user_id: Optional[int] = None
+    is_published: bool = False
+
+
+class SceneSchema(pydantic.BaseModel):
+    id: int
+    campaign_id: int
+    name: str
+    description: Optional[str] = None
+    scene_order: int
+    background_url: Optional[str] = None
+    cards: List[Dict[str, Any]] = []
+    
+    class Config:
+        from_attributes = True
+
+
+class CampaignSchema(pydantic.BaseModel):
+    id: int
+    name: str
+    description: str
+    theme: str
+    recommended_level: int
+    recommended_party_size: int
+    estimated_duration_minutes: int
+    player_character_ids: List[int]
+    npc_character_ids: List[int]
+    enemy_character_ids: List[int]
+    creator_user_id: Optional[int]
+    is_published: bool
+    scenes: List[SceneSchema] = []
+    
+    class Config:
+        from_attributes = True
+
+
+class SceneCreate(pydantic.BaseModel):
+    campaign_id: int
+    name: str
+    description: str = ""
+    scene_order: int = 0
+    background_url: Optional[str] = None
+    cards: List[Dict[str, Any]] = []
+
+
+class CharacterSelectionRequest(pydantic.BaseModel):
+    player_id: int
+    character_id: int
+
+
+class CharacterDeselectionRequest(pydantic.BaseModel):
+    player_id: int
 
 # ==================================
 # 4. The FastAPI App Instance & CORS
@@ -1862,3 +1928,383 @@ async def delete_environmental_object(
     await manager.broadcast_session_state(session_id, db)
     
     return {"success": True}
+
+# ==================================
+# CAMPAIGN ENDPOINTS
+# ==================================
+
+@app.post("/campaigns", response_model=CampaignSchema)
+def create_campaign(campaign_data: CampaignCreate, db: Session = Depends(get_db)):
+    """Create a new campaign template"""
+    new_campaign = models.Campaign(
+        name=campaign_data.name,
+        description=campaign_data.description,
+        theme=campaign_data.theme,
+        recommended_level=campaign_data.recommended_level,
+        recommended_party_size=campaign_data.recommended_party_size,
+        estimated_duration_minutes=campaign_data.estimated_duration_minutes,
+        player_character_ids=campaign_data.player_character_ids,
+        npc_character_ids=campaign_data.npc_character_ids,
+        enemy_character_ids=campaign_data.enemy_character_ids,
+        creator_user_id=campaign_data.creator_user_id,
+        is_published=campaign_data.is_published
+    )
+    db.add(new_campaign)
+    db.commit()
+    db.refresh(new_campaign)
+    return new_campaign
+
+
+@app.get("/campaigns", response_model=List[CampaignSchema])
+def list_campaigns(published_only: bool = False, db: Session = Depends(get_db)):
+    """List all campaigns (or only published ones)"""
+    query = db.query(models.Campaign).options(joinedload(models.Campaign.scenes))
+    if published_only:
+        query = query.filter(models.Campaign.is_published == True)
+    return query.all()
+
+
+@app.get("/campaigns/{campaign_id}", response_model=CampaignSchema)
+def get_campaign(campaign_id: int, db: Session = Depends(get_db)):
+    """Get a specific campaign with all its details"""
+    campaign = db.query(models.Campaign).options(
+        joinedload(models.Campaign.scenes)
+    ).filter(models.Campaign.id == campaign_id).first()
+    
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
+@app.get("/campaigns/{campaign_id}/characters")
+def get_campaign_characters(campaign_id: int, db: Session = Depends(get_db)):
+    """
+    Get all characters associated with a campaign
+    Returns separate lists for players, NPCs, and enemies
+    """
+    campaign = db.query(models.Campaign).filter(models.Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    # Fetch player characters
+    player_chars = []
+    if campaign.player_character_ids:
+        player_chars = db.query(models.Character).filter(
+            models.Character.id.in_(campaign.player_character_ids)
+        ).all()
+    
+    # Fetch NPC characters
+    npc_chars = []
+    if campaign.npc_character_ids:
+        npc_chars = db.query(models.Character).filter(
+            models.Character.id.in_(campaign.npc_character_ids)
+        ).all()
+    
+    # Fetch enemy characters
+    enemy_chars = []
+    if campaign.enemy_character_ids:
+        enemy_chars = db.query(models.Character).filter(
+            models.Character.id.in_(campaign.enemy_character_ids)
+        ).all()
+    
+    return {
+        "player_characters": [CharacterSchema.model_validate(c) for c in player_chars],
+        "npcs": [CharacterSchema.model_validate(c) for c in npc_chars],
+        "enemies": [CharacterSchema.model_validate(c) for c in enemy_chars]
+    }
+
+
+# ==================================
+# SCENE ENDPOINTS
+# ==================================
+
+@app.post("/scenes", response_model=SceneSchema)
+def create_scene(scene_data: SceneCreate, db: Session = Depends(get_db)):
+    """Create a new scene for a campaign"""
+    # Verify campaign exists
+    campaign = db.query(models.Campaign).filter(models.Campaign.id == scene_data.campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    new_scene = models.Scene(
+        campaign_id=scene_data.campaign_id,
+        name=scene_data.name,
+        description=scene_data.description,
+        scene_order=scene_data.scene_order,
+        background_url=scene_data.background_url,
+        cards=scene_data.cards
+    )
+    db.add(new_scene)
+    db.commit()
+    db.refresh(new_scene)
+    return new_scene
+
+
+@app.get("/campaigns/{campaign_id}/scenes", response_model=List[SceneSchema])
+def get_campaign_scenes(campaign_id: int, db: Session = Depends(get_db)):
+    """Get all scenes for a campaign, ordered by scene_order"""
+    scenes = db.query(models.Scene).filter(
+        models.Scene.campaign_id == campaign_id
+    ).order_by(models.Scene.scene_order).all()
+    return scenes
+
+
+@app.patch("/scenes/{scene_id}", response_model=SceneSchema)
+def update_scene(scene_id: int, scene_data: SceneCreate, db: Session = Depends(get_db)):
+    """Update a scene's details"""
+    scene = db.query(models.Scene).filter(models.Scene.id == scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    
+    scene.name = scene_data.name
+    scene.description = scene_data.description
+    scene.scene_order = scene_data.scene_order
+    scene.background_url = scene_data.background_url
+    scene.cards = scene_data.cards
+    
+    db.commit()
+    db.refresh(scene)
+    return scene
+
+
+# ==================================
+# SESSION-CAMPAIGN INTEGRATION
+# ==================================
+
+@app.post("/sessions/{session_id}/select_campaign")
+async def select_campaign_for_session(
+    session_id: int,
+    campaign_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Attach a campaign to a session
+    This makes campaign characters available for selection
+    """
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    campaign = db.query(models.Campaign).filter(models.Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    session.campaign_id = campaign_id
+    session.campaign_name = campaign.name  # Update session name to match campaign
+    db.commit()
+    
+    await manager.broadcast_session_state(session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    return {"message": "Campaign selected successfully", "campaign_id": campaign_id}
+
+
+@app.post("/sessions/{session_id}/select_character")
+async def select_character_in_lobby(
+    session_id: int,
+    request: CharacterSelectionRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Player selects a character in the lobby (before game starts)
+    Updates character_selections in session
+    """
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session.current_mode != 'lobby':
+        raise HTTPException(status_code=400, detail="Can only select characters in lobby")
+    
+    # Check if character is already selected by someone else
+    if request.character_id in session.character_selections.values():
+        raise HTTPException(status_code=400, detail="Character already selected by another player")
+    
+    # Check if this player already has a selection
+    if request.player_id in session.character_selections:
+        # They're changing their selection
+        pass
+    
+    # Update selections
+    selections = session.character_selections.copy() if session.character_selections else {}
+    selections[str(request.player_id)] = request.character_id  # JSON keys must be strings
+    session.character_selections = selections
+    character = db.query(models.Character).filter(models.Character.id == request.character_id).first()
+    player = db.query(models.User).filter(models.User.id == request.player_id).first()
+    if character and player:
+        log_entry = models.GameLogEntry(
+            session_id=session_id,
+            event_type='character_selection',
+            details={
+                'player_name': player.display_name,
+                'character_name': character.name
+            }
+        )
+    db.add(log_entry)
+
+    db.commit()
+    await manager.broadcast_session_state(session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    
+    return {"message": "Character selected successfully"}
+
+
+@app.post("/sessions/{session_id}/deselect_character")
+async def deselect_character_in_lobby(
+    session_id: int,
+    request: CharacterDeselectionRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Player deselects their character in the lobby"""
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session.current_mode != 'lobby':
+        raise HTTPException(status_code=400, detail="Can only deselect characters in lobby")
+    
+    # Remove player's selection
+    selections = session.character_selections.copy() if session.character_selections else {}
+    selections.pop(str(request.player_id), None)
+    session.character_selections = selections
+    character = db.query(models.Character).filter(models.Character.id == request.character_id).first()
+    player = db.query(models.User).filter(models.User.id == request.player_id).first()
+    if character and player:
+        log_entry = models.GameLogEntry(
+            session_id=session_id,
+            event_type='character_selection',
+            details={
+                'player_name': player.display_name,
+                'character_name': character.name
+            }
+        )
+    db.add(log_entry)
+
+    db.commit()
+    await manager.broadcast_session_state(session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    
+    
+    return {"message": "Character deselected successfully"}
+
+
+@app.post("/sessions/{session_id}/start_with_campaign")
+async def start_session_with_campaign(
+    session_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    GM starts the session - creates SessionCharacters from selected characters
+    """
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session.current_mode != 'lobby':
+        raise HTTPException(status_code=400, detail="Session already started")
+    
+    if not session.character_selections:
+        raise HTTPException(status_code=400, detail="No characters selected yet")
+    
+    # Create SessionCharacters for each selected character
+    for player_id_str, character_id in session.character_selections.items():
+        player_id = int(player_id_str)
+        
+        # Get the character template
+        character = db.query(models.Character).options(
+            joinedload(models.Character.race),
+            joinedload(models.Character.char_class)
+        ).filter(models.Character.id == character_id).first()
+        
+        if not character:
+            continue
+        
+        # Get character's abilities
+        ability_links = db.query(models.CharacterAbility).filter(
+            models.CharacterAbility.character_id == character_id
+        ).all()
+        ability_ids = [link.ability_id for link in ability_links]
+        
+        # Calculate max resources using CharacterSchema
+        char_schema = CharacterSchema.model_validate(character)
+        
+        # Create SessionCharacter
+        session_char = models.SessionCharacter(
+            session_id=session_id,
+            character_id=character_id,
+            player_id=player_id,
+            level=character.level,
+            learned_abilities=ability_ids,
+            npc_type=None,  # Player characters have no npc_type
+            current_prana=char_schema.max_prana,
+            current_tapas=char_schema.max_tapas,
+            current_maya=char_schema.max_maya,
+            remaining_speed=char_schema.movement_speed
+        )
+        db.add(session_char)
+    
+    # Update session mode
+    session.current_mode = 'exploration'
+    db.commit()
+    
+    await manager.broadcast_session_state(session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    return {"message": "Session started successfully"}
+
+
+# ==================================
+# SCENE BROADCASTING
+# ==================================
+
+@app.post("/sessions/{session_id}/set_active_scene")
+async def set_active_scene(
+    session_id: int,
+    scene_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """GM sets the active scene that players see"""
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Verify scene exists and belongs to session's campaign
+    if scene_id:
+        scene = db.query(models.Scene).filter(models.Scene.id == scene_id).first()
+        if not scene:
+            raise HTTPException(status_code=404, detail="Scene not found")
+        if session.campaign_id and scene.campaign_id != session.campaign_id:
+            raise HTTPException(status_code=400, detail="Scene does not belong to this campaign")
+    
+    session.active_scene_id = scene_id
+    db.commit()
+    
+    await manager.broadcast_session_state(session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    return {"message": "Active scene updated"}
+
+
+@app.get("/sessions/{session_id}/active_scene", response_model=SceneSchema)
+def get_active_scene(session_id: int, db: Session = Depends(get_db)):
+    """Get the currently active scene for a session"""
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if not session.active_scene_id:
+        raise HTTPException(status_code=404, detail="No active scene")
+    
+    scene = db.query(models.Scene).filter(models.Scene.id == session.active_scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    
+    return scene
+
+
+
+
+
+

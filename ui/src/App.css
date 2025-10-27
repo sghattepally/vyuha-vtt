@@ -277,8 +277,6 @@
 }
 
 body {
-  display: flex;
-  justify-content: center;
   background-color: var(--background-color);
   color: var(--text-color);
   font-family: sans-serif;
@@ -368,31 +366,49 @@ body {
 /* --- Lobby Page Styles --- */
 .lobby-page {
   display: grid;
-  grid-template-columns: 1fr 400px; /* Main content on the left, log on the right */
+  grid-template-columns: 1fr 1fr;
   gap: 2rem;
-  max-width: 1000px;
-  margin: 4rem auto;
+  max-width: 1400px;
+  margin: 2rem auto;
   padding: 0 2rem;
+  height: calc(100vh - 4rem);
 }
 
-.lobby-main-content {
+.lobby-left-content {
   background-color: var(--surface-color);
   padding: 2rem;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  text-align: center;
+  overflow-y: auto;
+}
+
+.lobby-right-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: 100%;
+}
+
+.lobby-character-panel {
+  background-color: var(--surface-color);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  padding: 1rem;
+  overflow-y: auto;
+  max-height: 50vh;
+  flex-shrink: 0;
 }
 
 .lobby-game-log {
   background-color: var(--surface-color);
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  height: 600px; 
-  display: flex; 
-  flex-direction: column; 
-  padding: 1rem; 
+  padding: 1rem;
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
-
 .lobby-game-log .game-log {
   flex-grow: 1; 
 }
@@ -2097,4 +2113,722 @@ body {
 
 .env-quick-controls button:hover {
     opacity: 0.8;
+}
+
+/* Campaign Selector */
+.campaign-selector {
+  margin: 2rem 0;
+}
+
+.campaign-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.campaign-card {
+  background-color: var(--background-color);
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1.5rem;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.campaign-card:hover {
+  border-color: var(--primary-color);
+  transform: translateY(-2px);
+}
+
+.campaign-card.selected {
+  border-color: var(--primary-color);
+  background-color: rgba(255, 170, 0, 0.1);
+}
+
+.campaign-card h4 {
+  margin: 0 0 0.5rem 0;
+  color: var(--primary-color);
+}
+
+.campaign-card p {
+  color: var(--text-color);
+  font-size: 0.9rem;
+  margin: 0.5rem 0;
+  line-height: 1.4;
+}
+
+.campaign-meta {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.85rem;
+  color: #999;
+}
+
+.select-campaign-button {
+  width: 100%;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background-color: var(--primary-color);
+  color: #111;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.select-campaign-button:hover {
+  opacity: 0.9;
+}
+
+.select-campaign-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Campaign Selected Banner */
+.campaign-selected {
+  margin: 2rem 0;
+  padding: 1rem;
+  background-color: rgba(255, 170, 0, 0.1);
+  border: 2px solid var(--primary-color);
+  border-radius: 8px;
+}
+
+.campaign-selected h3 {
+  margin-top: 0;
+  color: var(--primary-color);
+}
+
+/* Character Selection Panel */
+.character-selection-panel {
+  margin: 2rem 0;
+}
+
+.my-selection-banner {
+  background-color: rgba(255, 170, 0, 0.2);
+  border: 2px solid var(--primary-color);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.my-selection-banner p {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.deselect-button {
+  padding: 0.5rem 1rem;
+  background-color: #555;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.deselect-button:hover {
+  background-color: #666;
+}
+
+.character-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.character-card {
+  background-color: var(--background-color);
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1.25rem;
+  transition: all 0.2s;
+}
+
+.character-card:not(.disabled):hover {
+  border-color: var(--primary-color);
+  transform: translateY(-2px);
+}
+
+.character-card.selected {
+  border-color: #666;
+  opacity: 0.7;
+}
+
+.character-card.my-selection {
+  border-color: var(--primary-color);
+  background-color: rgba(255, 170, 0, 0.15);
+  opacity: 1;
+}
+
+.character-card.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.character-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.character-header h4 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--text-color);
+}
+
+.taken-badge {
+  background-color: #666;
+  color: white;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: bold;
+}
+
+.my-badge {
+  background-color: var(--primary-color);
+  color: #111;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: bold;
+}
+
+.character-info {
+  margin-bottom: 0.75rem;
+}
+
+.character-race-class {
+  color: var(--primary-color);
+  font-size: 0.9rem;
+  margin: 0.25rem 0;
+}
+
+.character-level {
+  color: #999;
+  font-size: 0.85rem;
+  margin: 0.25rem 0;
+}
+
+.character-backstory {
+  font-size: 0.85rem;
+  color: #aaa;
+  line-height: 1.4;
+  margin: 0.75rem 0;
+  font-style: italic;
+}
+
+.character-stats {
+  margin: 1rem 0;
+  padding: 0.75rem;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-around;
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+}
+
+.stat-row span {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.select-character-button {
+  width: 100%;
+  padding: 0.75rem;
+  background-color: var(--primary-color);
+  color: #111;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  margin-top: 0.75rem;
+}
+
+.select-character-button:hover {
+  opacity: 0.9;
+}
+
+.select-character-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Campaign NPCs Info */
+.campaign-npcs-info {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.campaign-npcs-info h4 {
+  margin-top: 0;
+  color: var(--primary-color);
+}
+
+.info-text {
+  color: #999;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.enemy-list {
+  margin-top: 1rem;
+}
+
+.enemy-list h5 {
+  color: #ff6b6b;
+  margin-bottom: 0.5rem;
+}
+
+.enemy-list ul {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.enemy-list li {
+  padding: 0.5rem;
+  background-color: rgba(255, 107, 107, 0.1);
+  border-left: 3px solid #ff6b6b;
+  margin-bottom: 0.5rem;
+}
+
+/* Campaign Status */
+.campaign-status {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  border-left: 4px solid var(--primary-color);
+}
+
+.campaign-status h4 {
+  margin-top: 0;
+  color: var(--primary-color);
+}
+
+.campaign-status p {
+  margin: 0.5rem 0;
+}
+
+.warning-text {
+  color: #ff9800;
+  font-weight: bold;
+}
+
+/* Traditional Character Selection (Non-Campaign Mode) */
+.traditional-character-selection {
+  margin: 2rem 0;
+}
+
+.selected-character {
+  background-color: rgba(255, 170, 0, 0.2);
+  border: 2px solid var(--primary-color);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.selected-character p {
+  margin: 0 0 0.75rem 0;
+}
+
+.remove-character-button {
+  padding: 0.5rem 1rem;
+  background-color: #c82333;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.remove-character-button:hover {
+  background-color: #a71d2a;
+}
+
+.character-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.character-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem;
+  background-color: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.create-character-button {
+  width: 100%;
+  padding: 0.75rem;
+  margin-top: 1rem;
+  background-color: #3a3a3a;
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.create-character-button:hover {
+  background-color: #444;
+}
+
+/* Start Game Button */
+.start-game-button {
+  width: 100%;
+  padding: 1rem;
+  font-size: 1.1rem;
+  font-weight: bold;
+  background-color: var(--primary-color);
+  color: #111;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.start-game-button:hover {
+  opacity: 0.9;
+}
+
+.start-game-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background-color: #666;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .campaign-list,
+  .character-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .lobby-page {
+    grid-template-columns: 1fr;
+  }
+  
+  .my-selection-banner {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+}
+
+/* ============================================
+   GAME LOG COMPREHENSIVE STYLES
+   Add these to your existing App.css
+   ============================================ */
+
+/* Base log styles (keep existing ones, these are additions) */
+.log-messages-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.log-message {
+  padding: 0.5rem;
+  border-radius: 4px;
+  line-height: 1.5;
+  transition: background-color 0.2s;
+}
+
+.log-message:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Log type colors */
+.log-type-player_join,
+.log-type-character_select,
+.log-type-mode_change,
+.log-type-turn_order_set {
+  border-left: 3px solid var(--primary-color);
+  background-color: rgba(255, 170, 0, 0.1);
+}
+
+.log-type-attack_hit {
+  border-left: 3px solid #ff6b6b;
+}
+
+.log-type-attack_miss {
+  border-left: 3px solid #666;
+}
+
+.log-type-heal,
+.log-type-heal_from_item {
+  border-left: 3px solid #51cf66;
+}
+
+.log-type-skill_check_initiated,
+.log-type-skill_check_result {
+  border-left: 3px solid #4dabf7;
+}
+
+.log-type-environmental_object_created,
+.log-type-environmental_object_repaired {
+  border-left: 3px solid #96f2d7;
+}
+
+.log-type-environmental_object_damaged,
+.log-type-environmental_section_damaged {
+  border-left: 3px solid #ff922b;
+}
+
+.log-type-environmental_object_destroyed,
+.log-type-environmental_section_collapsed {
+  border-left: 3px solid #ff0000;
+  background-color: rgba(255, 0, 0, 0.1);
+  font-weight: bold;
+}
+
+.log-type-item_use,
+.log-type-item_give,
+.log-type-item_equip,
+.log-type-gm_give_item {
+  border-left: 3px solid #b197fc;
+}
+
+.log-type-item_destroy {
+  border-left: 3px solid #868e96;
+}
+
+.log-type-campaign_selected,
+.log-type-character_selection,
+.log-type-scene_change {
+  border-left: 3px solid var(--primary-color);
+  background-color: rgba(255, 170, 0, 0.15);
+}
+
+.log-type-loka_resonance_changed,
+.log-type-loka_avahana_activated {
+  border-left: 3px solid #da77f2;
+  background-color: rgba(218, 119, 242, 0.1);
+}
+
+/* Inline text styling */
+.log-system {
+  color: var(--primary-color);
+  font-style: italic;
+}
+
+.log-gm-action {
+  color: #ffd43b;
+}
+
+.log-hit {
+  color: #ff6b6b;
+  font-weight: bold;
+}
+
+.log-miss {
+  color: #868e96;
+}
+
+.log-damage {
+  color: #ff6b6b;
+  font-weight: bold;
+}
+
+.log-healing {
+  color: #51cf66;
+  font-weight: bold;
+}
+
+.log-dice {
+  color: #74c0fc;
+  font-family: 'Courier New', monospace;
+}
+
+.log-total {
+  color: var(--primary-color);
+  font-weight: bold;
+}
+
+.log-success {
+  color: #51cf66;
+  font-weight: bold;
+}
+
+.log-failure {
+  color: #ff6b6b;
+  font-weight: bold;
+}
+
+.log-warning {
+  color: #ff922b;
+}
+
+.log-status {
+  color: #748ffc;
+  font-style: italic;
+}
+
+.log-status-value {
+  color: var(--primary-color);
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.log-destroyed {
+  color: #ff0000;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.log-collapsed {
+  color: #ff6b6b;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+/* Environmental log entries */
+.log-environmental {
+  color: #96f2d7;
+}
+
+.log-environmental-damage {
+  color: #ff922b;
+}
+
+.log-environmental-repair {
+  color: #51cf66;
+}
+
+.log-environmental-destroyed {
+  color: #ff0000;
+  font-weight: bold;
+  text-align: center;
+  padding: 0.75rem;
+  background-color: rgba(255, 0, 0, 0.15);
+  border: 2px solid #ff0000;
+  border-radius: 6px;
+}
+
+/* Item logs */
+.log-item {
+  color: #b197fc;
+}
+
+.log-item-destroy {
+  color: #868e96;
+  font-style: italic;
+}
+
+/* Skill check logs */
+.log-skill-check {
+  color: #4dabf7;
+}
+
+.roll-tooltip {
+  cursor: help;
+  border-bottom: 1px dotted #74c0fc;
+}
+
+/* Loka logs */
+.log-loka {
+  color: #da77f2;
+  font-weight: bold;
+  text-align: center;
+  padding: 0.75rem;
+  background: linear-gradient(90deg, rgba(218, 119, 242, 0.1), rgba(218, 119, 242, 0.2), rgba(218, 119, 242, 0.1));
+  border-radius: 6px;
+  border-left: 3px solid #da77f2;
+  border-right: 3px solid #da77f2;
+}
+
+/* Actor/Target emphasis */
+.actor {
+  color: var(--primary-color);
+  font-weight: bold;
+}
+
+.target {
+  color: #ff8787;
+  font-weight: bold;
+}
+
+/* Unknown/error states */
+.log-unknown {
+  color: #868e96;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.log-error {
+  color: #ff6b6b;
+  background-color: rgba(255, 107, 107, 0.1);
+  padding: 0.75rem;
+  border-radius: 4px;
+  border-left: 3px solid #ff6b6b;
+}
+
+/* Placeholder text */
+.placeholder-text {
+  color: #868e96;
+  font-style: italic;
+  text-align: center;
+  padding: 1rem;
+}
+
+/* Loading state */
+.log-messages-container .placeholder-text {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* Responsive adjustments for log */
+@media (max-width: 768px) {
+  .log-message {
+    padding: 0.4rem;
+    font-size: 0.9rem;
+  }
+  
+  .log-environmental-destroyed,
+  .log-loka {
+    padding: 0.5rem;
+  }
+}
+
+/* Special emphasis for critical events */
+.log-type-environmental_object_destroyed .log-message,
+.log-type-environmental_section_collapsed .log-message {
+  animation: shake 0.5s;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+  20%, 40%, 60%, 80% { transform: translateX(5px); }
 }
