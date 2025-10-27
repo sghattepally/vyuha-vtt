@@ -171,6 +171,10 @@ class Character(Base):
     unlocked_loka_attunement = Column(String, nullable=True)
     currency = Column(Integer, default=0)
     movement_speed = Column(Integer, default=6)
+    level_6_loka_choice = Column(String, nullable=True)  # "Resistance" or "Mastery"
+    has_loka_resistance = Column(Boolean, default=False)  # Calculated from choice
+    has_loka_mastery = Column(Boolean, default=False)  # Calculated from choice
+    loka_avahana_used_this_combat = Column(Boolean, default=False)  # Track usage
     session_characters = relationship("SessionCharacter", back_populates="character")
     inventory = relationship("CharacterInventory", back_populates="character")
 
@@ -210,9 +214,12 @@ class GameSession(Base):
     turn_order = Column(JSON, default=[])
     current_turn_index = Column(Integer, default=0)
     access_code = Column(String, unique=True, index=True, nullable=True)
+    active_loka_summoning = Column(JSON, default=dict)
+    environmental_resonance = Column(String, default='none')
     participants = relationship("SessionCharacter", back_populates="session")
     log_entries = relationship("GameLogEntry", back_populates="session", cascade="all, delete-orphan")
     skill_checks = relationship("SkillCheck", back_populates="session", cascade="all, delete-orphan")
+    environmental_objects = relationship("EnvironmentalObject", back_populates="session", cascade="all, delete-orphan")
 
 class GameLogEntry(Base):
     __tablename__ = "game_log_entries"
@@ -239,3 +246,80 @@ class SkillCheck(Base):
 
     participant = relationship("SessionCharacter")
     session = relationship("GameSession")
+
+# === ENVIRONMENTAL OBJECTS SYSTEM ===
+
+class EnvironmentalObjectType(str, enum.Enum):
+    BRIDGE = "bridge"
+    GATE = "gate"
+    WALL = "wall"
+    ALTAR = "altar"
+    SIEGE_WEAPON = "siege_weapon"
+    TRAP = "trap"
+    DESTRUCTIBLE = "destructible"
+
+class EnvironmentalObject(Base):
+    __tablename__ = "environmental_objects"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=False)
+    
+    # Identity
+    name = Column(String, nullable=False)
+    object_type = Column(SQLAlchemyEnum(EnvironmentalObjectType))
+    description = Column(Text, default="")
+    icon_url = Column(String, nullable=True)
+    
+    # Grid Positioning (list of {x, y} dicts)
+    grid_positions = Column(JSON, default=list)
+    
+    # Structural Properties
+    has_sections = Column(Boolean, default=False)
+    total_sections = Column(Integer, default=1)
+    current_integrity = Column(Integer, default=100)
+    max_integrity = Column(Integer, default=100)
+    critical_threshold = Column(Integer, default=0)
+    
+    # Defensive Properties
+    evasion_dc = Column(Integer, default=10)
+    armor_value = Column(Integer, default=0)
+    
+    # Status
+    is_functional = Column(Boolean, default=True)
+    is_visible_to_players = Column(Boolean, default=True)
+    
+    # Metadata (for campaign-specific data)
+    camp_metadata = Column(JSON, default=dict)
+    
+    # Relationships
+    session = relationship("GameSession", back_populates="environmental_objects")
+    sections = relationship("EnvironmentalObjectSection", back_populates="parent_object", cascade="all, delete-orphan")
+
+
+class EnvironmentalObjectSection(Base):
+    __tablename__ = "environmental_object_sections"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    parent_id = Column(Integer, ForeignKey("environmental_objects.id"), nullable=False)
+    
+    # Identity
+    section_name = Column(String, nullable=False)
+    section_index = Column(Integer, nullable=False)
+    
+    # Positioning
+    grid_positions = Column(JSON, default=list)
+    
+    # Health
+    current_integrity = Column(Integer)
+    max_integrity = Column(Integer)
+    
+    # Defensive Properties
+    evasion_dc = Column(Integer, default=10)
+    armor_value = Column(Integer, default=0)
+    
+    # Status
+    is_destroyed = Column(Boolean, default=False)
+    is_critical = Column(Boolean, default=False)
+    
+    # Relationship
+    parent_object = relationship("EnvironmentalObject", back_populates="sections")

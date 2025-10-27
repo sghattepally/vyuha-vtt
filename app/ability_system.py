@@ -10,6 +10,7 @@ from . import models
 from pydantic import BaseModel
 import math
 import random
+from . import loka_system
 
 # ==================================
 # Pydantic Schemas for Type Safety
@@ -85,7 +86,28 @@ class AbilitySystem:
     # ==================================
     # Validation Methods
     # ==================================
-    
+    def _get_active_resonance(self, character: models.Character) -> Tuple[str, bool]:
+        """
+        Get the active resonance affecting this character.
+        Returns (resonance_type, is_enhanced)
+        """
+        # Check for active summoning (overrides environmental)
+        if (self.session.active_loka_summoning and 
+            self.session.active_loka_summoning.get("turns_remaining", 0) > 0):
+            resonance = self.session.active_loka_summoning["type"]
+            is_enhanced = self.session.active_loka_summoning.get("is_enhanced", False)
+        else:
+            # Fall back to environmental resonance
+            resonance = self.session.environmental_resonance or "none"
+            is_enhanced = False
+        
+        # Characters with Loka Resistance ignore all resonance
+        if character.has_loka_resistance:
+            return "none", False
+        
+        return resonance, is_enhanced
+
+
     def validate_ability_use(
         self, 
         actor: models.SessionCharacter, 
@@ -111,23 +133,46 @@ class AbilitySystem:
                     return False, f"Insufficient movement (need {ability.resource_cost}, have {actor.remaining_speed})."
         
         # Check resource costs
+        active_resonance, is_enhanced = self._get_active_resonance(actor.character)
+        has_loka_resistance = actor.character.has_loka_resistance
+    
         if ability.resource_type == models.ResourceType.TAPAS:
-            if actor.current_tapas < ability.resource_cost:
-                return False, f"Insufficient Tapas (need {ability.resource_cost}, have {actor.current_tapas})."
+        # Calculate modified cost
+            modified_cost = loka_system.apply_resonance_to_ability_cost(
+                base_cost=ability.resource_cost,
+                ability_resource="tapas",
+                active_resonance=active_resonance,
+                is_enhanced=is_enhanced,
+                has_loka_resistance=has_loka_resistance
+            )
+        
+        if actor.current_tapas < modified_cost:
+            return False, f"Insufficient Tapas (need {modified_cost}, have {actor.current_tapas})."
+    
         elif ability.resource_type == models.ResourceType.MAYA:
-            if actor.current_maya < ability.resource_cost:
-                return False, f"Insufficient Māyā (need {ability.resource_cost}, have {actor.current_maya})."
+        # Calculate modified cost
+            modified_cost = loka_system.apply_resonance_to_ability_cost(
+                base_cost=ability.resource_cost,
+                ability_resource="maya",
+                active_resonance=active_resonance,
+                is_enhanced=is_enhanced,
+                has_loka_resistance=has_loka_resistance
+        )
+        
+        if actor.current_maya < modified_cost:
+            return False, f"Insufficient Māyā (need {modified_cost}, have {actor.current_maya})."
+    
         elif ability.resource_type == models.ResourceType.SPEED:
-            # For movement, we only require > 0 speed to enable the button.
-            # The actual distance cost is validated during execution.
+        # Movement doesn't use resonance
             if actor.remaining_speed < 1:
                 return False, f"No movement speed remaining this turn."
-        
+    
         # Check custom requirements (JSON-based)
         if ability.requirements:
             is_valid, msg = self._check_custom_requirements(actor, ability.requirements)
             if not is_valid:
                 return False, msg
+        
         print("DEBUG_VALIDATE: PASSED validate_ability_use.")
         return True, ""
     
@@ -250,15 +295,35 @@ class AbilitySystem:
             actor.reactions -= 1
         
         # Consume resources
+        active_resonance, is_enhanced = self._get_active_resonance(actor.character)
+        has_loka_resistance = actor.character.has_loka_resistance
+    
         if ability.resource_type == models.ResourceType.TAPAS:
-            actor.current_tapas -= ability.resource_cost
+            modified_cost = loka_system.apply_resonance_to_ability_cost(
+            base_cost=ability.resource_cost,
+            ability_resource="tapas",
+            active_resonance=active_resonance,
+            is_enhanced=is_enhanced,
+            has_loka_resistance=has_loka_resistance
+        )
+            actor.current_tapas -= modified_cost
+        
         elif ability.resource_type == models.ResourceType.MAYA:
-            actor.current_maya -= ability.resource_cost
+            modified_cost = loka_system.apply_resonance_to_ability_cost(
+            base_cost=ability.resource_cost,
+            ability_resource="maya",
+            active_resonance=active_resonance,
+            is_enhanced=is_enhanced,
+            has_loka_resistance=has_loka_resistance
+        )
+            actor.current_maya -= modified_cost
+        
         elif ability.resource_type == models.ResourceType.SPEED:
             actor.remaining_speed -= ability.resource_cost
+        
         elif ability.resource_type == models.ResourceType.PRANA:
             actor.current_prana = max(0, actor.current_prana - ability.resource_cost)
-        
+    
         self.db.add(actor)
     
     # ==================================
@@ -280,8 +345,29 @@ class AbilitySystem:
         actor_char = CharacterSchema.model_validate(actor.character)
         target_char = CharacterSchema.model_validate(target.character)
         
-        # Attack roll
-        to_hit_mod = get_modifier(getattr(actor_char, ability.to_hit_attribute))
+        active_resonance, is_enhanced = self._get_active_resonance(actor.character)
+        has_loka_resistance = actor.character.has_loka_resistance
+    
+        # Determine if this is a Tapas or Maya ability based on its cost
+        if ability.resource_type == models.ResourceType.TAPAS:
+            ability_resource = "tapas"
+        elif ability.resource_type == models.ResourceType.MAYA:
+            ability_resource = "maya"
+        else:
+            ability_resource = None
+    
+        # Apply resonance modifier to the to-hit modifier
+        if ability_resource:
+            resonance_mod = loka_system.apply_resonance_to_ability_roll(
+                base_roll=0,  # We're modifying the modifier, not the d20 roll itself
+                ability_resource=ability_resource,
+                active_resonance=active_resonance,
+                is_enhanced=is_enhanced,
+                has_loka_resistance=has_loka_resistance
+            )
+            to_hit_mod += resonance_mod
+
+
         attack_roll = random.randint(1, 20)
         total_attack = attack_roll + to_hit_mod
         

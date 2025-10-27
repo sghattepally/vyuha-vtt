@@ -184,6 +184,70 @@ class CharacterSchema(pydantic.BaseModel):
     class Config:
         from_attributes = True
 
+class EnvironmentalObjectSectionSchema(pydantic.BaseModel):
+    id: int
+    section_name: str
+    section_index: int
+    grid_positions: List[Dict[str, int]] = []
+    current_integrity: int
+    max_integrity: int
+    evasion_dc: int
+    armor_value: int
+    is_destroyed: bool
+    is_critical: bool
+    
+    class Config:
+        from_attributes = True
+
+
+class EnvironmentalObjectSchema(pydantic.BaseModel):
+    id: int
+    session_id: int
+    name: str
+    object_type: str
+    description: str
+    icon_url: Optional[str] = None
+    grid_positions: List[Dict[str, int]] = []
+    has_sections: bool
+    total_sections: int
+    current_integrity: int
+    max_integrity: int
+    critical_threshold: int
+    evasion_dc: int
+    armor_value: int
+    is_functional: bool
+    is_visible_to_players: bool
+    camp_metadata: Dict[str, Any] = {}
+    sections: List[EnvironmentalObjectSectionSchema] = []
+    
+    class Config:
+        from_attributes = True
+
+
+class EnvironmentalObjectCreate(pydantic.BaseModel):
+    name: str
+    object_type: str
+    description: str = ""
+    icon_url: Optional[str] = None
+    grid_positions: List[Dict[str, int]] = []
+    has_sections: bool = False
+    total_sections: int = 1
+    max_integrity: int = 100
+    critical_threshold: int = 0
+    evasion_dc: int = 10
+    armor_value: int = 0
+    camp_metadata: Dict[str, Any] = {}
+
+
+class DamageEnvironmentalObjectRequest(pydantic.BaseModel):
+    damage: int
+    section_id: Optional[int] = None
+
+
+class RepairEnvironmentalObjectRequest(pydantic.BaseModel):
+    repair_amount: int
+    section_id: Optional[int] = None
+
 # --- Session Schemas ---
 class SessionCharacterSchema(pydantic.BaseModel):
     id: int
@@ -240,6 +304,7 @@ class GameSessionSchema(pydantic.BaseModel):
     turn_order: List[int] = []
     current_turn_index: int = 0
     skill_checks: List[SkillCheckSchema] = []
+    environmental_objects: List[EnvironmentalObjectSchema] = []
 
     class Config:
         from_attributes = True
@@ -1573,3 +1638,227 @@ async def use_inventory_item(inventory_id: int, db: Session = Depends(get_db)):
     await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
 
     return {"message": f"{inventory_item.item.puranic_name} was used."}
+
+@app.post("/sessions/{session_id}/environmental_objects", response_model=EnvironmentalObjectSchema)
+async def create_environmental_object(
+    session_id: int,
+    obj_data: EnvironmentalObjectCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    GM creates an environmental object in the session.
+    If has_sections=True, automatically generates sections.
+    """
+    session = db.query(models.GameSession).filter(models.GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    new_obj = models.EnvironmentalObject(
+        session_id=session_id,
+        name=obj_data.name,
+        object_type=obj_data.object_type,
+        description=obj_data.description,
+        icon_url=obj_data.icon_url,
+        grid_positions=obj_data.grid_positions,
+        has_sections=obj_data.has_sections,
+        total_sections=obj_data.total_sections,
+        current_integrity=obj_data.max_integrity,
+        max_integrity=obj_data.max_integrity,
+        critical_threshold=obj_data.critical_threshold,
+        evasion_dc=obj_data.evasion_dc,
+        armor_value=obj_data.armor_value,
+        camp_metadata=obj_data.camp_metadata
+    )
+    db.add(new_obj)
+    db.commit()
+    db.refresh(new_obj)
+    
+    # If sectioned, create sections
+    if obj_data.has_sections and obj_data.total_sections > 0:
+        section_integrity = obj_data.max_integrity // obj_data.total_sections
+        
+        for i in range(obj_data.total_sections):
+            section = models.EnvironmentalObjectSection(
+                parent_id=new_obj.id,
+                section_name=f"{obj_data.name} - Section {i+1}",
+                section_index=i,
+                grid_positions=[],  # GM can configure later
+                current_integrity=section_integrity,
+                max_integrity=section_integrity,
+                evasion_dc=obj_data.evasion_dc,
+                armor_value=obj_data.armor_value
+            )
+            db.add(section)
+        db.commit()
+        db.refresh(new_obj)
+    
+    log_event(db, session_id, 'env_object_created', details={
+        "object_name": new_obj.name,
+        "object_type": new_obj.object_type
+    })
+    
+    background_tasks.add_task(manager.broadcast_session_state, session_id, db)
+    
+    return new_obj
+
+
+@app.get("/sessions/{session_id}/environmental_objects", response_model=List[EnvironmentalObjectSchema])
+def get_environmental_objects(session_id: int, db: Session = Depends(get_db)):
+    """Get all environmental objects in a session"""
+    objects = db.query(models.EnvironmentalObject).filter(
+        models.EnvironmentalObject.session_id == session_id
+    ).all()
+    return objects
+
+
+@app.patch("/sessions/{session_id}/environmental_objects/{object_id}/damage")
+async def damage_environmental_object(
+    session_id: int,
+    object_id: int,
+    damage_request: DamageEnvironmentalObjectRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Damage an environmental object or specific section.
+    Handles armor reduction, critical thresholds, destruction.
+    """
+    env_obj = db.query(models.EnvironmentalObject).filter(
+        models.EnvironmentalObject.id == object_id,
+        models.EnvironmentalObject.session_id == session_id
+    ).first()
+    
+    if not env_obj:
+        raise HTTPException(status_code=404, detail="Environmental object not found")
+    
+    damage_amount = damage_request.damage
+    section_id = damage_request.section_id
+    
+    # Apply armor reduction
+    final_damage = max(0, damage_amount - env_obj.armor_value)
+    
+    # Damage specific section or whole object
+    if section_id:
+        section = db.query(models.EnvironmentalObjectSection).filter(
+            models.EnvironmentalObjectSection.id == section_id
+        ).first()
+        
+        if section:
+            section.current_integrity = max(0, section.current_integrity - final_damage)
+            
+            if section.current_integrity == 0 and not section.is_destroyed:
+                section.is_destroyed = True
+                log_event(db, session_id, 'env_section_destroyed', details={
+                    "object_name": env_obj.name,
+                    "section_name": section.section_name,
+                    "damage": final_damage
+                })
+            
+            db.add(section)
+            
+            # Recalculate overall object integrity
+            total_integrity = sum(s.current_integrity for s in env_obj.sections)
+            env_obj.current_integrity = total_integrity
+    else:
+        # Damage whole object
+        env_obj.current_integrity = max(0, env_obj.current_integrity - final_damage)
+        
+        if env_obj.current_integrity == 0 and env_obj.is_functional:
+            env_obj.is_functional = False
+            log_event(db, session_id, 'env_object_destroyed', details={
+                "object_name": env_obj.name,
+                "damage": final_damage
+            })
+    
+    # Check if object hit critical threshold
+    if env_obj.current_integrity <= env_obj.critical_threshold and env_obj.is_functional:
+        env_obj.is_functional = False
+        log_event(db, session_id, 'env_object_critical_failure', details={
+            "object_name": env_obj.name,
+            "message": f"{env_obj.name} has critically failed!"
+        })
+    
+    db.add(env_obj)
+    db.commit()
+    
+    await manager.broadcast_session_state(session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    
+    return {"success": True, "object": EnvironmentalObjectSchema.model_validate(env_obj)}
+
+
+@app.patch("/sessions/{session_id}/environmental_objects/{object_id}/repair")
+async def repair_environmental_object(
+    session_id: int,
+    object_id: int,
+    repair_request: RepairEnvironmentalObjectRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Repair an environmental object"""
+    env_obj = db.query(models.EnvironmentalObject).filter(
+        models.EnvironmentalObject.id == object_id
+    ).first()
+    
+    if not env_obj:
+        raise HTTPException(status_code=404, detail="Object not found")
+    
+    repair_amount = repair_request.repair_amount
+    section_id = repair_request.section_id
+    
+    if section_id:
+        section = db.query(models.EnvironmentalObjectSection).filter(
+            models.EnvironmentalObjectSection.id == section_id
+        ).first()
+        if section:
+            section.current_integrity = min(
+                section.max_integrity,
+                section.current_integrity + repair_amount
+            )
+            if section.current_integrity > 0:
+                section.is_destroyed = False
+            db.add(section)
+    else:
+        env_obj.current_integrity = min(
+            env_obj.max_integrity,
+            env_obj.current_integrity + repair_amount
+        )
+        if env_obj.current_integrity > env_obj.critical_threshold:
+            env_obj.is_functional = True
+        db.add(env_obj)
+    
+    db.commit()
+    
+    log_event(db, session_id, 'env_object_repaired', details={
+        "object_name": env_obj.name,
+        "repair_amount": repair_amount
+    })
+    
+    await manager.broadcast_session_state(session_id, db)
+    await manager.broadcast_json(session_id, json.dumps({"type": "new_log_entry"}))
+    
+    return {"success": True, "object": EnvironmentalObjectSchema.model_validate(env_obj)}
+
+
+@app.delete("/sessions/{session_id}/environmental_objects/{object_id}")
+async def delete_environmental_object(
+    session_id: int,
+    object_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """GM deletes an environmental object"""
+    env_obj = db.query(models.EnvironmentalObject).filter(
+        models.EnvironmentalObject.id == object_id
+    ).first()
+    
+    if not env_obj:
+        raise HTTPException(status_code=404, detail="Object not found")
+    
+    db.delete(env_obj)
+    db.commit()
+    
+    await manager.broadcast_session_state(session_id, db)
+    
+    return {"success": True}

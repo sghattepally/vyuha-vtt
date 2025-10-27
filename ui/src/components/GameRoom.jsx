@@ -10,7 +10,7 @@ import SkillCheckModal from './SkillCheckModal';
 import SkillCheckPrompt from './SkillCheckPrompt';
 import CharacterSheet from './CharacterSheet';
 import InventoryPanel from './InventoryPanel';
-import CharacterCard from './CharacterCard';
+import EnvironmentalObjectPanel from './EnvironmentalObjectPanel';
 import Token from './Token';
 import NpcManager from './NpcManager';
 import PartyPanel from './PartyPanel';
@@ -404,6 +404,12 @@ const handleTokenClick = async (targetId) => {
                   {sessionData.current_mode === 'staging' && (
                     <button onClick={handleBeginCombat}>Begin Combat</button>
                   )}
+                  {(sessionData.current_mode === 'staging' || sessionData.current_mode === 'combat') && (
+    <EnvironmentalObjectPanel 
+        sessionId={sessionData.id}
+        isGM={effectiveIsGM}
+    />
+)}
                   {sessionData.current_mode === 'combat' && (
       <button className = "gm-end-combat-btn" onClick={handleEndCombat}>
         End Combat
